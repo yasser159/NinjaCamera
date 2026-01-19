@@ -23,14 +23,16 @@ struct ContentView: View {
                     VStack(spacing: 16) {
                         header
                         modePicker
-                        actionRow
+                        captureCounter
                         timeLapseControls
                         photoQuickAction
-                    complianceNote
                     }
                     .padding(20)
                     .foregroundStyle(.white)
                 }
+                actionRow
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 56)
                 statusPanel
                     .padding(.horizontal, 20)
                     .padding(.bottom, 16)
@@ -70,13 +72,10 @@ struct ContentView: View {
     }
 
     private var header: some View {
-        VStack(spacing: 6) {
-            Text("Zero Camera")
-                .font(.system(size: 24, weight: .semibold, design: .rounded))
-            Text("Minimal capture controls")
-                .font(.system(size: 14, weight: .regular, design: .rounded))
-                .foregroundStyle(.white.opacity(0.7))
-        }
+        Image("seeying eye")
+            .resizable()
+            .scaledToFit()
+            .frame(width: 120, height: 120)
     }
 
     private var statusPanel: some View {
@@ -99,7 +98,7 @@ struct ContentView: View {
     private var actionRow: some View {
         SlideControl(
             title: isModeActive ? "Slide to Stop" : "Slide to Start",
-            icon: isModeActive ? "stop.fill" : "eye.fill",
+            icon: isModeActive ? "engine.combustion" : "eye.fill",
             tint: isModeActive ? Color.red : Color.white,
             progress: $sliderProgress
         ) {
@@ -111,9 +110,28 @@ struct ContentView: View {
         }
     }
 
+    private var captureCounter: some View {
+        Group {
+            if isCountingModeActive {
+                HStack {
+                    Label("Pings captured", systemImage: "compass.drawing")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.7))
+                    Spacer()
+                    Text("\(viewModel.photoCount)")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+                .padding(12)
+                .background(.white.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+    }
+
     private var modePicker: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Capture mode", systemImage: "slider.horizontal.3")
+            Label("Ping mode", systemImage: "slider.horizontal.3")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.7))
             HStack(spacing: 10) {
@@ -122,14 +140,12 @@ struct ContentView: View {
                         viewModel.selectedMode = mode
                         viewModel.stopAllCaptureModes()
                     }) {
-                        VStack(spacing: 4) {
+                        VStack(spacing: 0) {
                             Image(systemName: modeSymbol(mode))
-                                .font(.system(size: 16, weight: .semibold))
-                            Text(mode.rawValue)
-                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                .font(.system(size: 22, weight: .semibold))
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
+                        .padding(.vertical, 10)
                         .background(viewModel.selectedMode == mode ? Color.white : Color.white.opacity(0.12))
                         .foregroundStyle(viewModel.selectedMode == mode ? .black : .white)
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -143,7 +159,7 @@ struct ContentView: View {
     private func modeSymbol(_ mode: CameraViewModel.CaptureMode) -> String {
         switch mode {
         case .photo:
-            return "camera"
+            return "compass.drawing"
         case .timeLapse:
             return "timer"
         case .faceDetection:
@@ -155,7 +171,7 @@ struct ContentView: View {
 
     private var timeLapseControls: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Time-lapse interval", systemImage: "timer")
+            Label("Ping interval", systemImage: "timer")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(.white)
             Picker("Interval", selection: $viewModel.timeLapseInterval) {
@@ -180,16 +196,16 @@ struct ContentView: View {
                     .foregroundStyle(.white.opacity(0.7))
             }
         }
-        .opacity(viewModel.selectedMode == .timeLapse ? 1 : 0.35)
-        .allowsHitTesting(viewModel.selectedMode == .timeLapse)
+        .opacity((viewModel.selectedMode == .timeLapse || viewModel.selectedMode == .faceDetection) ? 1 : 0.35)
+        .allowsHitTesting(viewModel.selectedMode == .timeLapse || viewModel.selectedMode == .faceDetection)
     }
 
     private var photoQuickAction: some View {
         Button(action: { viewModel.capturePhoto() }) {
             HStack(spacing: 10) {
-                Image(systemName: "camera")
+                Image(systemName: "compass.drawing")
                     .font(.system(size: 16, weight: .semibold))
-                Text("Photo")
+                Text("Pings")
                     .font(.system(size: 16, weight: .semibold, design: .rounded))
             }
             .padding(.vertical, 14)
@@ -218,6 +234,19 @@ struct ContentView: View {
         }
     }
 
+    private var isCountingModeActive: Bool {
+        switch viewModel.selectedMode {
+        case .timeLapse:
+            return viewModel.isTimeLapseEnabled
+        case .faceDetection:
+            return viewModel.isFaceDetectionEnabled
+        case .voice:
+            return viewModel.isVoiceEnabled
+        case .photo:
+            return false
+        }
+    }
+
     private func updateCoverVisibility(isActive: Bool) {
         coverWorkItem?.cancel()
         coverWorkItem = nil
@@ -235,13 +264,6 @@ struct ContentView: View {
         }
         coverWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: workItem)
-    }
-
-    private var complianceNote: some View {
-        Text("Capture requires the app to stay in the foreground. iOS blocks camera access when the screen is locked or the app is in the background.")
-            .font(.system(size: 11, weight: .regular, design: .rounded))
-            .foregroundStyle(.white.opacity(0.6))
-            .multilineTextAlignment(.center)
     }
 
     private var statusColor: Color {

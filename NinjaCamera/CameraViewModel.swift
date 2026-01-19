@@ -16,7 +16,7 @@ import UIKit
 @MainActor
 final class CameraViewModel: NSObject, ObservableObject {
     enum CaptureMode: String, CaseIterable, Identifiable {
-        case photo = "Photo"
+        case photo = "Pings"
         case timeLapse = "Time-lapse"
         case faceDetection = "Faces"
         case voice = "Now"
@@ -43,6 +43,7 @@ final class CameraViewModel: NSObject, ObservableObject {
     @Published var isSessionConfigured = false
     @Published var timeLapseCountdown: Int = 0
     @Published var isFaceDetectionEnabled = false
+    @Published var photoCount: Int = 0
     @Published var selectedMode: CaptureMode = .timeLapse
 
     nonisolated(unsafe) private let session = AVCaptureSession()
@@ -103,7 +104,7 @@ final class CameraViewModel: NSObject, ObservableObject {
 
             guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
                 Task { @MainActor in
-                    self.fail("No back camera available")
+                    self.fail("No back ping sensor available")
                 }
                 return
             }
@@ -113,7 +114,7 @@ final class CameraViewModel: NSObject, ObservableObject {
                 if self.session.canAddInput(videoInput) {
                     self.session.addInput(videoInput)
                 } else {
-                    Task { @MainActor in self.fail("Unable to add camera input") }
+                    Task { @MainActor in self.fail("Unable to add eye input") }
                     return
                 }
 
@@ -146,7 +147,7 @@ final class CameraViewModel: NSObject, ObservableObject {
                 }
             } catch {
                 Task { @MainActor in
-                    self.fail("Camera configuration failed: \(error.localizedDescription)")
+                    self.fail("Eye configuration failed: \(error.localizedDescription)")
                 }
             }
         }
@@ -156,7 +157,7 @@ final class CameraViewModel: NSObject, ObservableObject {
         configureAmbientAudioSession()
         requestCameraAccess { granted in
             guard granted else {
-                self.fail("Camera permission is required")
+                self.fail("Eye permission is required")
                 return
             }
             let faceEnabled = self.isFaceDetectionEnabled
@@ -184,7 +185,7 @@ final class CameraViewModel: NSObject, ObservableObject {
     func capturePhoto() {
         guard isSessionConfigured else { return }
         captureState = .capturing
-        statusMessage = "Capturing photo"
+        statusMessage = "Capturing ping"
         emitConfirmation()
 
         sessionQueue.async {
@@ -207,15 +208,18 @@ final class CameraViewModel: NSObject, ObservableObject {
             capturePhoto()
         case .timeLapse:
             if !isTimeLapseEnabled {
+                photoCount = 0
                 isTimeLapseEnabled = true
                 startTimeLapse()
             }
         case .faceDetection:
             if !isFaceDetectionEnabled {
+                photoCount = 0
                 setFaceDetectionEnabled(true)
             }
         case .voice:
             if !isVoiceEnabled {
+                photoCount = 0
                 setVoiceEnabled(true)
             }
         }
@@ -405,6 +409,8 @@ final class CameraViewModel: NSObject, ObservableObject {
             let audioSession = AVAudioSession.sharedInstance()
             do {
                 try audioSession.setCategory(.record, mode: .measurement, options: [.mixWithOthers])
+                try audioSession.setPreferredSampleRate(44_100)
+                try audioSession.setPreferredIOBufferDuration(0.02)
                 try audioSession.setActive(true, options: [])
             } catch {
                 self.fail("Audio session error: \(error.localizedDescription)")
@@ -419,7 +425,18 @@ final class CameraViewModel: NSObject, ObservableObject {
             }
 
             let inputNode = self.audioEngine.inputNode
-            let recordingFormat = inputNode.outputFormat(forBus: 0)
+            var recordingFormat = inputNode.outputFormat(forBus: 0)
+            if recordingFormat.sampleRate == 0 || recordingFormat.channelCount == 0 {
+                let sampleRate = audioSession.sampleRate > 0 ? audioSession.sampleRate : 44_100
+                let channels = max(1, audioSession.inputNumberOfChannels)
+                if let fallback = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: UInt32(channels)) {
+                    recordingFormat = fallback
+                } else {
+                    self.fail("Audio input format unavailable")
+                    self.isVoiceEnabled = false
+                    return
+                }
+            }
             inputNode.removeTap(onBus: 0)
             inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
                 self?.speechRequest?.append(buffer)
@@ -437,6 +454,12 @@ final class CameraViewModel: NSObject, ObservableObject {
             self.speechTask = self.speechRecognizer?.recognitionTask(with: self.speechRequest!) { [weak self] result, error in
                 guard let self else { return }
                 if let error = error {
+                    let nsError = error as NSError
+                    if !self.isVoiceEnabled ||
+                        (nsError.domain == SFSpeechRecognizerErrorDomain &&
+                         nsError.code == SFSpeechRecognizerErrorCode.canceled.rawValue) {
+                        return
+                    }
                     self.fail("Speech error: \(error.localizedDescription)")
                     return
                 }
@@ -554,13 +577,13 @@ nonisolated extension CameraViewModel: AVCapturePhotoCaptureDelegate, AVCaptureM
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         if let error {
             Task { @MainActor in
-                self.fail("Photo capture failed: \(error.localizedDescription)")
+                self.fail("Ping capture failed: \(error.localizedDescription)")
             }
             return
         }
         guard let data = photo.fileDataRepresentation() else {
             Task { @MainActor in
-                self.fail("Photo data unavailable")
+                self.fail("Ping data unavailable")
             }
             return
         }
@@ -568,7 +591,7 @@ nonisolated extension CameraViewModel: AVCapturePhotoCaptureDelegate, AVCaptureM
         Task { @MainActor in
             self.requestPhotoLibraryAccess { granted in
                 guard granted else {
-                    self.fail("Photo library permission is required")
+                    self.fail("Pings library permission is required")
                     return
                 }
                 PHPhotoLibrary.shared().performChanges({
@@ -579,7 +602,8 @@ nonisolated extension CameraViewModel: AVCapturePhotoCaptureDelegate, AVCaptureM
                         if let error {
                             self.fail("Save failed: \(error.localizedDescription)")
                         } else if success {
-                            self.statusMessage = "Photo saved"
+                            self.statusMessage = "Ping saved"
+                            self.photoCount += 1
                             if self.isTimeLapseEnabled {
                                 self.captureState = .timeLapse
                             } else {
