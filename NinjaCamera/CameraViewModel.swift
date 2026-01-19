@@ -46,7 +46,7 @@ final class CameraViewModel: NSObject, ObservableObject {
     @Published var isRecording = false
     @Published var timeLapseCountdown: Int = 0
     @Published var isFaceDetectionEnabled = false
-    @Published var selectedMode: CaptureMode = .photo
+    @Published var selectedMode: CaptureMode = .video
 
     nonisolated(unsafe) private let session = AVCaptureSession()
     nonisolated(unsafe) private let photoOutput = AVCapturePhotoOutput()
@@ -194,6 +194,7 @@ final class CameraViewModel: NSObject, ObservableObject {
         guard isSessionConfigured else { return }
         captureState = .capturing
         statusMessage = "Capturing photo"
+        emitConfirmation()
 
         sessionQueue.async {
             let settings: AVCapturePhotoSettings
@@ -430,7 +431,7 @@ final class CameraViewModel: NSObject, ObservableObject {
 
             let audioSession = AVAudioSession.sharedInstance()
             do {
-                try audioSession.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .mixWithOthers])
+                try audioSession.setCategory(.record, mode: .measurement, options: [.mixWithOthers])
                 try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
             } catch {
                 self.fail("Audio session error: \(error.localizedDescription)")
@@ -480,6 +481,7 @@ final class CameraViewModel: NSObject, ObservableObject {
         speechRequest = nil
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         if isVoiceEnabled {
             isVoiceEnabled = false
         }
@@ -504,10 +506,8 @@ final class CameraViewModel: NSObject, ObservableObject {
     }
 
     private func emitConfirmation() {
-        if hapticsEnabled {
-            let generator = UINotificationFeedbackGenerator()
-            generator.notificationOccurred(.success)
-        }
+        let generator = UINotificationFeedbackGenerator()
+        generator.notificationOccurred(.success)
         if audioConfirmationEnabled {
             AudioServicesPlaySystemSound(1057)
         }

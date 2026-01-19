@@ -9,8 +9,11 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var viewModel = CameraViewModel()
+    @State private var sliderProgress: CGFloat = 0
+    @State private var coverVisible = false
+    @State private var coverWorkItem: DispatchWorkItem?
 
-    private let intervals: [Double] = [15, 30, 45, 60]
+    private let intervals: [Double] = [5, 15, 30, 45, 60]
 
     var body: some View {
         ZStack {
@@ -21,17 +24,29 @@ struct ContentView: View {
                     statusPanel
                 modePicker
                 actionRow
-                modeToggles
                 timeLapseControls
+                photoQuickAction
+                videoQuickAction
                 // confirmationControls
                 complianceNote
                 }
                 .padding(20)
                 .foregroundStyle(.white)
             }
+            if coverVisible {
+                Color.black
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        handleCoverTap()
+                    }
+            }
         }
         .onAppear { viewModel.startSession() }
         .onDisappear { viewModel.stopSession() }
+        .onChange(of: isModeActive) { _, active in
+            updateCoverVisibility(isActive: active)
+        }
         .alert("Issue", isPresented: Binding(get: {
             viewModel.lastError != nil
         }, set: { newValue in
@@ -80,16 +95,18 @@ struct ContentView: View {
     }
 
     private var actionRow: some View {
-        Button(action: {
+        SlideControl(
+            title: isModeActive ? "Slide to Stop" : "Slide to Start",
+            icon: isModeActive ? "stop.fill" : "eye.fill",
+            tint: isModeActive ? Color.red : Color.white,
+            progress: $sliderProgress
+        ) {
             if isModeActive {
                 viewModel.stopSelectedMode()
             } else {
                 viewModel.startSelectedMode()
             }
-        }) {
-            Label(isModeActive ? "Stop" : "Start", systemImage: isModeActive ? "stop.fill" : "play.fill")
         }
-        .buttonStyle(PrimaryActionStyle())
     }
 
     private var modePicker: some View {
@@ -98,7 +115,7 @@ struct ContentView: View {
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.7))
             HStack(spacing: 10) {
-                ForEach(CameraViewModel.CaptureMode.allCases) { mode in
+                ForEach(captureModes) { mode in
                     Button(action: {
                         viewModel.selectedMode = mode
                         viewModel.stopAllCaptureModes()
@@ -136,30 +153,19 @@ struct ContentView: View {
         }
     }
 
-    private var modeToggles: some View {
-        VStack(spacing: 12) {
-            Toggle(isOn: Binding(get: {
-                viewModel.isDiscreetMode
-            }, set: { value in
-                viewModel.setDiscreetMode(value)
-            })) {
-                Label("Screen-off capture (dim screen)", systemImage: "eye.slash")
-            }
-        }
-        .toggleStyle(SwitchToggleStyle(tint: .white))
-    }
-
     private var timeLapseControls: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Time-lapse interval", systemImage: "timer")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.7))
+                .foregroundStyle(.white)
             Picker("Interval", selection: $viewModel.timeLapseInterval) {
                 ForEach(intervals, id: \.self) { interval in
                     Text("\(Int(interval))s").tag(interval)
                 }
             }
             .pickerStyle(.segmented)
+            .tint(.white)
+            .colorScheme(.dark)
             .onChange(of: viewModel.timeLapseInterval) { _, _ in
                 if viewModel.selectedMode == .timeLapse, viewModel.isTimeLapseEnabled {
                     viewModel.startTimeLapse()
@@ -174,6 +180,48 @@ struct ContentView: View {
                     .foregroundStyle(.white.opacity(0.7))
             }
         }
+        .opacity(viewModel.selectedMode == .timeLapse ? 1 : 0.35)
+        .allowsHitTesting(viewModel.selectedMode == .timeLapse)
+    }
+
+    private var photoQuickAction: some View {
+        Button(action: { viewModel.capturePhoto() }) {
+            HStack(spacing: 10) {
+                Image(systemName: "camera")
+                    .font(.system(size: 16, weight: .semibold))
+                Text("Photo")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+            }
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity)
+            .background(Color.white.opacity(0.12))
+            .foregroundStyle(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var videoQuickAction: some View {
+        Button(action: {
+            viewModel.isRecording ? viewModel.stopRecording() : viewModel.startRecording()
+        }) {
+            HStack(spacing: 10) {
+                Image(systemName: viewModel.isRecording ? "stop.fill" : "video")
+                    .font(.system(size: 16, weight: .semibold))
+                Text(viewModel.isRecording ? "Stop Video" : "Video")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+            }
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity)
+            .background(viewModel.isRecording ? Color.red.opacity(0.85) : Color.white.opacity(0.12))
+            .foregroundStyle(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var captureModes: [CameraViewModel.CaptureMode] {
+        [.timeLapse, .faceDetection, .voice]
     }
 
     private var isModeActive: Bool {
@@ -189,6 +237,25 @@ struct ContentView: View {
         case .voice:
             return viewModel.isVoiceEnabled
         }
+    }
+
+    private func updateCoverVisibility(isActive: Bool) {
+        coverWorkItem?.cancel()
+        coverWorkItem = nil
+        coverVisible = isActive
+    }
+
+    private func handleCoverTap() {
+        guard isModeActive else { return }
+        coverVisible = false
+        coverWorkItem?.cancel()
+        let workItem = DispatchWorkItem {
+            if isModeActive {
+                coverVisible = true
+            }
+        }
+        coverWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: workItem)
     }
 
     private var complianceNote: some View {
@@ -209,6 +276,66 @@ struct ContentView: View {
         case .error:
             return .orange
         }
+    }
+}
+
+private struct SlideControl: View {
+    let title: String
+    let icon: String
+    let tint: Color
+    @Binding var progress: CGFloat
+    var onComplete: () -> Void
+
+    var body: some View {
+        GeometryReader { proxy in
+            let height: CGFloat = 52
+            let width = proxy.size.width
+            let knobSize = height - 8
+            let maxOffset = max(0, width - knobSize - 8)
+
+            ZStack(alignment: .leading) {
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+                    .frame(height: height)
+
+                Capsule(style: .continuous)
+                    .fill(tint.opacity(0.2))
+                    .frame(width: max(52, progress), height: height)
+
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, maxHeight: height)
+
+                Circle()
+                    .fill(tint)
+                    .frame(width: knobSize, height: knobSize)
+                    .overlay(
+                        Image(systemName: icon)
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(tint == .white ? .black : .white)
+                    )
+                    .offset(x: min(max(progress - knobSize, 0), maxOffset))
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                let raw = value.translation.width + knobSize
+                                progress = min(max(raw, knobSize), maxOffset + knobSize)
+                            }
+                            .onEnded { _ in
+                                let threshold = maxOffset + knobSize * 0.6
+                                if progress >= threshold {
+                                    onComplete()
+                                }
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    progress = 0
+                                }
+                            }
+                    )
+            }
+            .frame(height: height)
+        }
+        .frame(height: 52)
     }
 }
 
