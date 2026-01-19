@@ -18,20 +18,23 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             background
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 16) {
-                    header
-                    statusPanel
-                modePicker
-                actionRow
-                timeLapseControls
-                photoQuickAction
-                videoQuickAction
-                // confirmationControls
-                complianceNote
+            VStack(spacing: 0) {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 16) {
+                        header
+                        modePicker
+                        actionRow
+                        timeLapseControls
+                        photoQuickAction
+                        videoQuickAction
+                        complianceNote
+                    }
+                    .padding(20)
+                    .foregroundStyle(.white)
                 }
-                .padding(20)
-                .foregroundStyle(.white)
+                statusPanel
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 16)
             }
             if coverVisible {
                 Color.black

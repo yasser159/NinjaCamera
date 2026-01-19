@@ -52,6 +52,7 @@ final class CameraViewModel: NSObject, ObservableObject {
     nonisolated(unsafe) private let photoOutput = AVCapturePhotoOutput()
     nonisolated(unsafe) private let movieOutput = AVCaptureMovieFileOutput()
     nonisolated(unsafe) private let metadataOutput = AVCaptureMetadataOutput()
+    nonisolated(unsafe) private var audioInput: AVCaptureDeviceInput?
     private let sessionQueue = DispatchQueue(label: "ninjacamera.session.queue")
     private let metadataQueue = DispatchQueue(label: "ninjacamera.metadata.queue")
     private var timeLapseTimer: Timer?
@@ -120,13 +121,6 @@ final class CameraViewModel: NSObject, ObservableObject {
                     return
                 }
 
-                if let audioDevice = AVCaptureDevice.default(for: .audio) {
-                    let audioInput = try AVCaptureDeviceInput(device: audioDevice)
-                    if self.session.canAddInput(audioInput) {
-                        self.session.addInput(audioInput)
-                    }
-                }
-
                 if self.session.canAddOutput(self.photoOutput) {
                     self.session.addOutput(self.photoOutput)
                 }
@@ -172,10 +166,14 @@ final class CameraViewModel: NSObject, ObservableObject {
                 self.fail("Camera permission is required")
                 return
             }
+            let faceEnabled = self.isFaceDetectionEnabled
             self.configureSessionIfNeeded {
                 self.sessionQueue.async {
                     if !self.session.isRunning {
                         self.session.startRunning()
+                    }
+                    if faceEnabled {
+                        self.configureFaceMetadataTypes()
                     }
                 }
             }
@@ -217,6 +215,21 @@ final class CameraViewModel: NSObject, ObservableObject {
                 self.fail("Microphone permission is required for video")
                 return
             }
+            self.sessionQueue.async {
+                if self.audioInput == nil, let audioDevice = AVCaptureDevice.default(for: .audio) {
+                    do {
+                        let input = try AVCaptureDeviceInput(device: audioDevice)
+                        if self.session.canAddInput(input) {
+                            self.session.addInput(input)
+                            self.audioInput = input
+                        }
+                    } catch {
+                        Task { @MainActor in
+                            self.fail("Audio input error: \(error.localizedDescription)")
+                        }
+                    }
+                }
+            }
             self.stopTimeLapse()
             let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("mov")
             self.movieOutput.startRecording(to: url, recordingDelegate: self)
@@ -232,6 +245,12 @@ final class CameraViewModel: NSObject, ObservableObject {
     func stopRecording() {
         guard movieOutput.isRecording else { return }
         movieOutput.stopRecording()
+        sessionQueue.async {
+            if let input = self.audioInput {
+                self.session.removeInput(input)
+                self.audioInput = nil
+            }
+        }
     }
 
     func startSelectedMode() {
@@ -377,6 +396,18 @@ final class CameraViewModel: NSObject, ObservableObject {
         }
     }
 
+    nonisolated(unsafe) private func configureFaceMetadataTypes(retryCount: Int = 0) {
+        if metadataOutput.availableMetadataObjectTypes.contains(.face) {
+            metadataOutput.metadataObjectTypes = [.face]
+            return
+        }
+        if retryCount < 5 {
+            sessionQueue.asyncAfter(deadline: .now() + 0.3) {
+                self.configureFaceMetadataTypes(retryCount: retryCount + 1)
+            }
+        }
+    }
+
     func setDiscreetMode(_ enabled: Bool) {
         if enabled {
             if originalBrightness == nil {
@@ -407,6 +438,10 @@ final class CameraViewModel: NSObject, ObservableObject {
             statusMessage = "Face detection running"
             updateFaceDetectionOutput(enabled: true)
             startIntervalCapture(mode: .faceDetection)
+            startSession()
+            sessionQueue.async {
+                self.configureFaceMetadataTypes()
+            }
         } else {
             isFaceDetectionEnabled = false
             updateFaceDetectionOutput(enabled: false)
