@@ -1,15 +1,15 @@
-# Discreet Camera – iOS App
+# Zero Camera – iOS App
 
 ## Codex / AI Brief (One Screen)
 
-Build a minimal iOS camera app that can capture photos or video with minimal on‑screen interaction, plus optional voice control and time‑lapse. Keep all behavior compliant with iOS permissions and background execution limits. The UI should be sparse and fast to configure.
+Build a minimal iOS camera app that can capture photos with minimal on‑screen interaction, plus optional voice control, face-triggered shots, and time‑lapse. Keep all behavior compliant with iOS permissions and background execution limits. The UI should be sparse and fast to configure.
 
 **Goals**
-- Screen‑off photo capture (no preview, no shutter animation).
-- Voice commands: “Now” (photo), “Video” (start), “Stop” (stop).
-- Time‑lapse intervals: 15/30/45/60 seconds; works with screen off.
+- Screen cover during capture sessions, with tap-to-reveal.
+- Voice command: “Now” (photo).
+- Time‑lapse intervals: 5/15/30/45/60 seconds.
 - Haptic or optional audio confirmation.
-- Clear opt‑in toggles for each mode.
+- Clear opt‑in controls for each mode.
 
 **Guardrails**
 - Must require explicit camera/mic permissions.
@@ -31,7 +31,7 @@ Build a minimal iOS camera app that can capture photos or video with minimal on�
 
 ## Overview
 
-Discreet Camera is an iOS camera application designed to capture photos or videos with minimal on-screen interaction. The app supports screen-off capture and voice-activated controls, allowing hands-free use in situations where visible phone interaction is undesirable.
+Zero Camera is an iOS camera application designed to capture photos with minimal on-screen interaction. The app supports a black screen cover and voice-activated controls, allowing hands-free use in situations where visible phone interaction is undesirable.
 
 **Important:** This app is intended for lawful, ethical use only. Users are responsible for complying with local laws regarding photography, audio input, and consent.
 
@@ -53,8 +53,6 @@ Hands-free camera control using simple voice commands.
 
 **Supported commands:**
 - “Now” → Capture a photo
-- “Video” → Start video recording
-- “Stop” → Stop video recording
 
 **Notes:**
 - Voice recognition runs locally where possible.
@@ -68,6 +66,7 @@ Hands-free camera control using simple voice commands.
 Automatically capture photos at fixed intervals.
 
 **Interval options:**
+- 5 seconds
 - 15 seconds
 - 30 seconds
 - 45 seconds
@@ -75,11 +74,10 @@ Automatically capture photos at fixed intervals.
 
 **Activation methods:**
 - Via UI controls
-- Via voice command
 
 **Behavior:**
-- Photos continue to be captured while the screen is off.
-- Time-lapse session can be paused or stopped manually or by voice.
+- Photos continue to be captured while the screen is covered.
+- Time-lapse session can be paused or stopped manually.
 
 ---
 
@@ -88,7 +86,7 @@ Automatically capture photos at fixed intervals.
 - Minimal UI designed for quick setup.
 - Clear toggles for:
   - Voice activation
-  - Screen-off capture
+  - Screen cover
   - Time-lapse interval selection
 - Status indicators (subtle vibration or optional sound).
 

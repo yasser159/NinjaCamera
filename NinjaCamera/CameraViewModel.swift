@@ -17,7 +17,6 @@ import UIKit
 final class CameraViewModel: NSObject, ObservableObject {
     enum CaptureMode: String, CaseIterable, Identifiable {
         case photo = "Photo"
-        case video = "Video"
         case timeLapse = "Time-lapse"
         case faceDetection = "Faces"
         case voice = "Now"
@@ -28,7 +27,6 @@ final class CameraViewModel: NSObject, ObservableObject {
     enum CaptureState: String {
         case idle = "Idle"
         case capturing = "Capturing"
-        case recording = "Recording"
         case timeLapse = "Time-lapse"
         case error = "Error"
     }
@@ -43,16 +41,13 @@ final class CameraViewModel: NSObject, ObservableObject {
     @Published var audioConfirmationEnabled = false
     @Published var lastError: String?
     @Published var isSessionConfigured = false
-    @Published var isRecording = false
     @Published var timeLapseCountdown: Int = 0
     @Published var isFaceDetectionEnabled = false
-    @Published var selectedMode: CaptureMode = .video
+    @Published var selectedMode: CaptureMode = .timeLapse
 
     nonisolated(unsafe) private let session = AVCaptureSession()
     nonisolated(unsafe) private let photoOutput = AVCapturePhotoOutput()
-    nonisolated(unsafe) private let movieOutput = AVCaptureMovieFileOutput()
     nonisolated(unsafe) private let metadataOutput = AVCaptureMetadataOutput()
-    nonisolated(unsafe) private var audioInput: AVCaptureDeviceInput?
     private let sessionQueue = DispatchQueue(label: "ninjacamera.session.queue")
     private let metadataQueue = DispatchQueue(label: "ninjacamera.metadata.queue")
     private var timeLapseTimer: Timer?
@@ -77,6 +72,7 @@ final class CameraViewModel: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        configureAmbientAudioSession()
         NotificationCenter.default.addObserver(self, selector: #selector(appWillResignActive), name: UIApplication.willResignActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
     }
@@ -125,10 +121,6 @@ final class CameraViewModel: NSObject, ObservableObject {
                     self.session.addOutput(self.photoOutput)
                 }
 
-                if self.session.canAddOutput(self.movieOutput) {
-                    self.session.addOutput(self.movieOutput)
-                }
-
                 if self.session.canAddOutput(self.metadataOutput) {
                     self.session.addOutput(self.metadataOutput)
                 }
@@ -161,6 +153,7 @@ final class CameraViewModel: NSObject, ObservableObject {
     }
 
     func startSession() {
+        configureAmbientAudioSession()
         requestCameraAccess { granted in
             guard granted else {
                 self.fail("Camera permission is required")
@@ -206,59 +199,12 @@ final class CameraViewModel: NSObject, ObservableObject {
         }
     }
 
-    func startRecording() {
-        guard isSessionConfigured else { return }
-        guard !movieOutput.isRecording else { return }
-
-        requestMicrophoneAccess { granted in
-            guard granted else {
-                self.fail("Microphone permission is required for video")
-                return
-            }
-            self.sessionQueue.async {
-                if self.audioInput == nil, let audioDevice = AVCaptureDevice.default(for: .audio) {
-                    do {
-                        let input = try AVCaptureDeviceInput(device: audioDevice)
-                        if self.session.canAddInput(input) {
-                            self.session.addInput(input)
-                            self.audioInput = input
-                        }
-                    } catch {
-                        Task { @MainActor in
-                            self.fail("Audio input error: \(error.localizedDescription)")
-                        }
-                    }
-                }
-            }
-            self.stopTimeLapse()
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("mov")
-            self.movieOutput.startRecording(to: url, recordingDelegate: self)
-            Task { @MainActor in
-                self.isRecording = true
-                self.captureState = .recording
-                self.statusMessage = "Recording video"
-                self.emitConfirmation()
-            }
-        }
-    }
-
-    func stopRecording() {
-        guard movieOutput.isRecording else { return }
-        movieOutput.stopRecording()
-        sessionQueue.async {
-            if let input = self.audioInput {
-                self.session.removeInput(input)
-                self.audioInput = nil
-            }
-        }
-    }
+    // Video recording removed.
 
     func startSelectedMode() {
         switch selectedMode {
         case .photo:
             capturePhoto()
-        case .video:
-            startRecording()
         case .timeLapse:
             if !isTimeLapseEnabled {
                 isTimeLapseEnabled = true
@@ -279,8 +225,6 @@ final class CameraViewModel: NSObject, ObservableObject {
         switch selectedMode {
         case .photo:
             break
-        case .video:
-            stopRecording()
         case .timeLapse:
             stopTimeLapse()
         case .faceDetection:
@@ -291,7 +235,6 @@ final class CameraViewModel: NSObject, ObservableObject {
     }
 
     func stopAllCaptureModes() {
-        stopRecording()
         stopTimeLapse()
         setFaceDetectionEnabled(false)
         setVoiceEnabled(false)
@@ -309,9 +252,6 @@ final class CameraViewModel: NSObject, ObservableObject {
 
     func startTimeLapse() {
         guard isSessionConfigured else { return }
-        if isRecording {
-            stopRecording()
-        }
         captureState = .timeLapse
         statusMessage = "Time-lapse running"
 
@@ -344,10 +284,8 @@ final class CameraViewModel: NSObject, ObservableObject {
         if isTimeLapseEnabled {
             isTimeLapseEnabled = false
         }
-        if !isRecording {
-            captureState = .idle
-            statusMessage = "Ready"
-        }
+        captureState = .idle
+        statusMessage = "Ready"
     }
 
     private func startIntervalCapture(mode: CaptureMode) {
@@ -396,7 +334,7 @@ final class CameraViewModel: NSObject, ObservableObject {
         }
     }
 
-    nonisolated(unsafe) private func configureFaceMetadataTypes(retryCount: Int = 0) {
+    nonisolated private func configureFaceMetadataTypes(retryCount: Int = 0) {
         if metadataOutput.availableMetadataObjectTypes.contains(.face) {
             metadataOutput.metadataObjectTypes = [.face]
             return
@@ -467,7 +405,7 @@ final class CameraViewModel: NSObject, ObservableObject {
             let audioSession = AVAudioSession.sharedInstance()
             do {
                 try audioSession.setCategory(.record, mode: .measurement, options: [.mixWithOthers])
-                try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+                try audioSession.setActive(true, options: [])
             } catch {
                 self.fail("Audio session error: \(error.localizedDescription)")
                 self.isVoiceEnabled = false
@@ -516,7 +454,7 @@ final class CameraViewModel: NSObject, ObservableObject {
         speechRequest = nil
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        configureAmbientAudioSession()
         if isVoiceEnabled {
             isVoiceEnabled = false
         }
@@ -530,12 +468,8 @@ final class CameraViewModel: NSObject, ObservableObject {
             lastCommandTimestamp = now
             capturePhoto()
             emitConfirmation()
-        } else if transcript.contains("video") {
-            lastCommandTimestamp = now
-            startRecording()
         } else if transcript.contains("stop") {
             lastCommandTimestamp = now
-            stopRecording()
             stopTimeLapse()
         }
     }
@@ -549,7 +483,6 @@ final class CameraViewModel: NSObject, ObservableObject {
     }
 
     @objc private func appWillResignActive() {
-        stopRecording()
         stopTimeLapse()
         stopVoiceRecognition()
         stopSession()
@@ -561,6 +494,7 @@ final class CameraViewModel: NSObject, ObservableObject {
 
     @objc private func appDidBecomeActive() {
         statusMessage = "Ready"
+        configureAmbientAudioSession()
         startSession()
     }
 
@@ -574,32 +508,6 @@ final class CameraViewModel: NSObject, ObservableObject {
             }
         default:
             completion(false)
-        }
-    }
-
-    private func requestMicrophoneAccess(completion: @escaping (Bool) -> Void) {
-        if #available(iOS 17.0, *) {
-            switch AVAudioApplication.shared.recordPermission {
-            case .granted:
-                completion(true)
-            case .undetermined:
-                AVAudioApplication.requestRecordPermission { granted in
-                    Task { @MainActor in completion(granted) }
-                }
-            default:
-                completion(false)
-            }
-        } else {
-            switch AVAudioSession.sharedInstance().recordPermission {
-            case .granted:
-                completion(true)
-            case .undetermined:
-                AVAudioSession.sharedInstance().requestRecordPermission { granted in
-                    Task { @MainActor in completion(granted) }
-                }
-            default:
-                completion(false)
-            }
         }
     }
 
@@ -630,9 +538,19 @@ final class CameraViewModel: NSObject, ObservableObject {
         captureState = .error
         statusMessage = message
     }
+
+    private func configureAmbientAudioSession() {
+        let audioSession = AVAudioSession.sharedInstance()
+        do {
+            try audioSession.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+            try audioSession.setActive(true, options: [])
+        } catch {
+            // Best-effort; avoid interrupting the user if audio session can't be set.
+        }
+    }
 }
 
-nonisolated extension CameraViewModel: AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate, AVCaptureMetadataOutputObjectsDelegate {
+nonisolated extension CameraViewModel: AVCapturePhotoCaptureDelegate, AVCaptureMetadataOutputObjectsDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         if let error {
             Task { @MainActor in
@@ -662,49 +580,11 @@ nonisolated extension CameraViewModel: AVCapturePhotoCaptureDelegate, AVCaptureF
                             self.fail("Save failed: \(error.localizedDescription)")
                         } else if success {
                             self.statusMessage = "Photo saved"
-                            if self.isRecording {
-                                self.captureState = .recording
-                            } else if self.isTimeLapseEnabled {
+                            if self.isTimeLapseEnabled {
                                 self.captureState = .timeLapse
                             } else {
                                 self.captureState = .idle
                             }
-                            self.emitConfirmation()
-                        }
-                    }
-                })
-            }
-        }
-    }
-
-    func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
-        Task { @MainActor in
-            self.isRecording = false
-        }
-
-        if let error {
-            Task { @MainActor in
-                self.fail("Recording failed: \(error.localizedDescription)")
-            }
-            return
-        }
-
-        Task { @MainActor in
-            self.requestPhotoLibraryAccess { granted in
-                guard granted else {
-                    self.fail("Photo library permission is required")
-                    return
-                }
-                PHPhotoLibrary.shared().performChanges({
-                    let request = PHAssetCreationRequest.forAsset()
-                    request.addResource(with: .video, fileURL: outputFileURL, options: nil)
-                }, completionHandler: { success, error in
-                    Task { @MainActor in
-                        if let error {
-                            self.fail("Save failed: \(error.localizedDescription)")
-                        } else if success {
-                            self.statusMessage = "Video saved"
-                            self.captureState = .idle
                             self.emitConfirmation()
                         }
                     }

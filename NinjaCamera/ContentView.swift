@@ -26,8 +26,7 @@ struct ContentView: View {
                         actionRow
                         timeLapseControls
                         photoQuickAction
-                        videoQuickAction
-                        complianceNote
+                    complianceNote
                     }
                     .padding(20)
                     .foregroundStyle(.white)
@@ -145,8 +144,6 @@ struct ContentView: View {
         switch mode {
         case .photo:
             return "camera"
-        case .video:
-            return "video"
         case .timeLapse:
             return "timer"
         case .faceDetection:
@@ -204,25 +201,6 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
-    private var videoQuickAction: some View {
-        Button(action: {
-            viewModel.isRecording ? viewModel.stopRecording() : viewModel.startRecording()
-        }) {
-            HStack(spacing: 10) {
-                Image(systemName: viewModel.isRecording ? "stop.fill" : "video")
-                    .font(.system(size: 16, weight: .semibold))
-                Text(viewModel.isRecording ? "Stop Video" : "Video")
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
-            }
-            .padding(.vertical, 14)
-            .frame(maxWidth: .infinity)
-            .background(viewModel.isRecording ? Color.red.opacity(0.85) : Color.white.opacity(0.12))
-            .foregroundStyle(.white)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        }
-        .buttonStyle(.plain)
-    }
-
     private var captureModes: [CameraViewModel.CaptureMode] {
         [.timeLapse, .faceDetection, .voice]
     }
@@ -231,8 +209,6 @@ struct ContentView: View {
         switch viewModel.selectedMode {
         case .photo:
             return false
-        case .video:
-            return viewModel.isRecording
         case .timeLapse:
             return viewModel.isTimeLapseEnabled
         case .faceDetection:
@@ -274,8 +250,6 @@ struct ContentView: View {
             return .green
         case .capturing, .timeLapse:
             return .yellow
-        case .recording:
-            return .red
         case .error:
             return .orange
         }
