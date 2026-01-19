@@ -15,6 +15,16 @@ import UIKit
 
 @MainActor
 final class CameraViewModel: NSObject, ObservableObject {
+    enum CaptureMode: String, CaseIterable, Identifiable {
+        case photo = "Photo"
+        case video = "Video"
+        case timeLapse = "Time-lapse"
+        case faceDetection = "Faces"
+        case voice = "Now"
+
+        var id: String { rawValue }
+    }
+
     enum CaptureState: String {
         case idle = "Idle"
         case capturing = "Capturing"
@@ -34,12 +44,21 @@ final class CameraViewModel: NSObject, ObservableObject {
     @Published var lastError: String?
     @Published var isSessionConfigured = false
     @Published var isRecording = false
+    @Published var timeLapseCountdown: Int = 0
+    @Published var isFaceDetectionEnabled = false
+    @Published var selectedMode: CaptureMode = .photo
 
     nonisolated(unsafe) private let session = AVCaptureSession()
     nonisolated(unsafe) private let photoOutput = AVCapturePhotoOutput()
     nonisolated(unsafe) private let movieOutput = AVCaptureMovieFileOutput()
+    nonisolated(unsafe) private let metadataOutput = AVCaptureMetadataOutput()
     private let sessionQueue = DispatchQueue(label: "ninjacamera.session.queue")
+    private let metadataQueue = DispatchQueue(label: "ninjacamera.metadata.queue")
     private var timeLapseTimer: Timer?
+    private var lastFaceCaptureDate: Date = .distantPast
+    private let faceCaptureCooldown: TimeInterval = 3
+    private var intervalMode: CaptureMode?
+    private var isFacePresent = false
 
     private let audioEngine = AVAudioEngine()
     private var speechRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -48,6 +67,12 @@ final class CameraViewModel: NSObject, ObservableObject {
     private var lastCommandTimestamp: Date = .distantPast
 
     private var originalBrightness: CGFloat?
+    private var activeScreen: UIScreen? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?
+            .screen
+    }
 
     override init() {
         super.init()
@@ -59,13 +84,25 @@ final class CameraViewModel: NSObject, ObservableObject {
         NotificationCenter.default.removeObserver(self)
     }
 
-    func configureSessionIfNeeded() {
-        guard !isSessionConfigured else { return }
-        sessionQueue.async {
-            self.session.beginConfiguration()
-            self.session.sessionPreset = .photo
+    func configureSessionIfNeeded(completion: (() -> Void)? = nil) {
+        guard !isSessionConfigured else {
+            completion?()
+            return
+        }
 
+        // Capture main-actor isolated state before hopping to the session queue
+        let faceDetectionEnabledAtConfig = self.isFaceDetectionEnabled
+
+        sessionQueue.async {
+            if self.session.isRunning {
+                self.session.stopRunning()
+            }
+            self.session.beginConfiguration()
             defer { self.session.commitConfiguration() }
+
+            self.session.inputs.forEach { self.session.removeInput($0) }
+            self.session.outputs.forEach { self.session.removeOutput($0) }
+            self.session.sessionPreset = .photo
 
             guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
                 Task { @MainActor in
@@ -98,10 +135,28 @@ final class CameraViewModel: NSObject, ObservableObject {
                     self.session.addOutput(self.movieOutput)
                 }
 
-                self.photoOutput.isHighResolutionCaptureEnabled = true
+                if self.session.canAddOutput(self.metadataOutput) {
+                    self.session.addOutput(self.metadataOutput)
+                }
+
+                self.metadataOutput.setMetadataObjectsDelegate(self, queue: self.metadataQueue)
+                if faceDetectionEnabledAtConfig,
+                   self.metadataOutput.availableMetadataObjectTypes.contains(.face) {
+                    self.metadataOutput.metadataObjectTypes = [.face]
+                } else {
+                    self.metadataOutput.metadataObjectTypes = []
+                }
+
+                // Prefer supported max photo dimensions (iOS 16+)
+                if #available(iOS 16.0, *) {
+                    if let maxDimensions = videoDevice.activeFormat.supportedMaxPhotoDimensions.last {
+                        self.photoOutput.maxPhotoDimensions = maxDimensions
+                    }
+                }
 
                 Task { @MainActor in
                     self.isSessionConfigured = true
+                    completion?()
                 }
             } catch {
                 Task { @MainActor in
@@ -117,10 +172,11 @@ final class CameraViewModel: NSObject, ObservableObject {
                 self.fail("Camera permission is required")
                 return
             }
-            self.configureSessionIfNeeded()
-            self.sessionQueue.async {
-                if !self.session.isRunning {
-                    self.session.startRunning()
+            self.configureSessionIfNeeded {
+                self.sessionQueue.async {
+                    if !self.session.isRunning {
+                        self.session.startRunning()
+                    }
                 }
             }
         }
@@ -146,7 +202,7 @@ final class CameraViewModel: NSObject, ObservableObject {
             } else {
                 settings = AVCapturePhotoSettings()
             }
-            settings.isHighResolutionPhotoEnabled = true
+            settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
             self.photoOutput.capturePhoto(with: settings, delegate: self)
         }
     }
@@ -177,9 +233,54 @@ final class CameraViewModel: NSObject, ObservableObject {
         movieOutput.stopRecording()
     }
 
+    func startSelectedMode() {
+        switch selectedMode {
+        case .photo:
+            capturePhoto()
+        case .video:
+            startRecording()
+        case .timeLapse:
+            if !isTimeLapseEnabled {
+                isTimeLapseEnabled = true
+                startTimeLapse()
+            }
+        case .faceDetection:
+            if !isFaceDetectionEnabled {
+                setFaceDetectionEnabled(true)
+            }
+        case .voice:
+            if !isVoiceEnabled {
+                setVoiceEnabled(true)
+            }
+        }
+    }
+
+    func stopSelectedMode() {
+        switch selectedMode {
+        case .photo:
+            break
+        case .video:
+            stopRecording()
+        case .timeLapse:
+            stopTimeLapse()
+        case .faceDetection:
+            setFaceDetectionEnabled(false)
+        case .voice:
+            setVoiceEnabled(false)
+        }
+    }
+
+    func stopAllCaptureModes() {
+        stopRecording()
+        stopTimeLapse()
+        setFaceDetectionEnabled(false)
+        setVoiceEnabled(false)
+    }
+
     func toggleTimeLapse(_ enabled: Bool) {
-        isTimeLapseEnabled = enabled
         if enabled {
+            disableOtherModes(except: .timeLapse)
+            isTimeLapseEnabled = true
             startTimeLapse()
         } else {
             stopTimeLapse()
@@ -194,18 +295,32 @@ final class CameraViewModel: NSObject, ObservableObject {
         captureState = .timeLapse
         statusMessage = "Time-lapse running"
 
-        timeLapseTimer?.invalidate()
-        timeLapseTimer = Timer.scheduledTimer(withTimeInterval: timeLapseInterval, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
-                self.capturePhoto()
+        startIntervalCapture(mode: .timeLapse)
+    }
+
+    @objc private func handleTimeLapseTick() {
+        if timeLapseCountdown <= 1 {
+            let shouldCapture: Bool
+            switch intervalMode {
+            case .timeLapse:
+                shouldCapture = true
+            case .faceDetection:
+                shouldCapture = isFacePresent
+            default:
+                shouldCapture = false
             }
+
+            if shouldCapture {
+                capturePhoto()
+            }
+            timeLapseCountdown = max(1, Int(timeLapseInterval.rounded()))
+        } else {
+            timeLapseCountdown -= 1
         }
     }
 
     func stopTimeLapse() {
-        timeLapseTimer?.invalidate()
-        timeLapseTimer = nil
+        stopIntervalCapture()
         if isTimeLapseEnabled {
             isTimeLapseEnabled = false
         }
@@ -215,25 +330,86 @@ final class CameraViewModel: NSObject, ObservableObject {
         }
     }
 
+    private func startIntervalCapture(mode: CaptureMode) {
+        intervalMode = mode
+        timeLapseTimer?.invalidate()
+        timeLapseCountdown = max(1, Int(timeLapseInterval.rounded()))
+        timeLapseTimer = Timer.scheduledTimer(timeInterval: 1, target: self, selector: #selector(handleTimeLapseTick), userInfo: nil, repeats: true)
+    }
+
+    private func stopIntervalCapture() {
+        intervalMode = nil
+        timeLapseTimer?.invalidate()
+        timeLapseTimer = nil
+        timeLapseCountdown = 0
+    }
+
+    private func disableOtherModes(except mode: CaptureMode) {
+        if isVoiceEnabled {
+            isVoiceEnabled = false
+            stopVoiceRecognition()
+        }
+        if mode != .timeLapse, isTimeLapseEnabled {
+            stopTimeLapse()
+        }
+        if mode != .faceDetection, isFaceDetectionEnabled {
+            isFaceDetectionEnabled = false
+            updateFaceDetectionOutput(enabled: false)
+        }
+    }
+
+    private func updateFaceDetectionOutput(enabled: Bool) {
+        sessionQueue.async {
+            self.session.beginConfiguration()
+            defer { self.session.commitConfiguration() }
+
+            if !self.session.outputs.contains(self.metadataOutput),
+               self.session.canAddOutput(self.metadataOutput) {
+                self.session.addOutput(self.metadataOutput)
+            }
+
+            if enabled, self.metadataOutput.availableMetadataObjectTypes.contains(.face) {
+                self.metadataOutput.metadataObjectTypes = [.face]
+            } else {
+                self.metadataOutput.metadataObjectTypes = []
+            }
+        }
+    }
+
     func setDiscreetMode(_ enabled: Bool) {
         if enabled {
             if originalBrightness == nil {
-                originalBrightness = UIScreen.main.brightness
+                originalBrightness = activeScreen?.brightness
             }
-            UIScreen.main.brightness = 0.05
+            activeScreen?.brightness = 0.05
         } else if let original = originalBrightness {
-            UIScreen.main.brightness = original
+            activeScreen?.brightness = original
             originalBrightness = nil
         }
         isDiscreetMode = enabled
     }
 
     func setVoiceEnabled(_ enabled: Bool) {
-        isVoiceEnabled = enabled
         if enabled {
+            stopAllCaptureModes()
+            isVoiceEnabled = true
             startVoiceRecognition()
         } else {
             stopVoiceRecognition()
+        }
+    }
+
+    func setFaceDetectionEnabled(_ enabled: Bool) {
+        if enabled {
+            disableOtherModes(except: .faceDetection)
+            isFaceDetectionEnabled = true
+            statusMessage = "Face detection running"
+            updateFaceDetectionOutput(enabled: true)
+            startIntervalCapture(mode: .faceDetection)
+        } else {
+            isFaceDetectionEnabled = false
+            updateFaceDetectionOutput(enabled: false)
+            stopIntervalCapture()
         }
     }
 
@@ -304,6 +480,9 @@ final class CameraViewModel: NSObject, ObservableObject {
         speechRequest = nil
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
+        if isVoiceEnabled {
+            isVoiceEnabled = false
+        }
     }
 
     private func handleVoiceCommand(_ transcript: String) {
@@ -338,6 +517,7 @@ final class CameraViewModel: NSObject, ObservableObject {
         stopRecording()
         stopTimeLapse()
         stopVoiceRecognition()
+        stopSession()
         if isVoiceEnabled {
             isVoiceEnabled = false
         }
@@ -363,15 +543,28 @@ final class CameraViewModel: NSObject, ObservableObject {
     }
 
     private func requestMicrophoneAccess(completion: @escaping (Bool) -> Void) {
-        switch AVAudioSession.sharedInstance().recordPermission {
-        case .granted:
-            completion(true)
-        case .undetermined:
-            AVAudioSession.sharedInstance().requestRecordPermission { granted in
-                Task { @MainActor in completion(granted) }
+        if #available(iOS 17.0, *) {
+            switch AVAudioApplication.shared.recordPermission {
+            case .granted:
+                completion(true)
+            case .undetermined:
+                AVAudioApplication.requestRecordPermission { granted in
+                    Task { @MainActor in completion(granted) }
+                }
+            default:
+                completion(false)
             }
-        default:
-            completion(false)
+        } else {
+            switch AVAudioSession.sharedInstance().recordPermission {
+            case .granted:
+                completion(true)
+            case .undetermined:
+                AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                    Task { @MainActor in completion(granted) }
+                }
+            default:
+                completion(false)
+            }
         }
     }
 
@@ -404,7 +597,7 @@ final class CameraViewModel: NSObject, ObservableObject {
     }
 }
 
-nonisolated extension CameraViewModel: AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate {
+nonisolated extension CameraViewModel: AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate, AVCaptureMetadataOutputObjectsDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         if let error {
             Task { @MainActor in
@@ -481,6 +674,16 @@ nonisolated extension CameraViewModel: AVCapturePhotoCaptureDelegate, AVCaptureF
                         }
                     }
                 })
+            }
+        }
+    }
+
+    func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
+        let hasFace = metadataObjects.contains(where: { $0 is AVMetadataFaceObject })
+        Task { @MainActor in
+            self.isFacePresent = hasFace
+            if hasFace, self.isFaceDetectionEnabled {
+                self.emitConfirmation()
             }
         }
     }

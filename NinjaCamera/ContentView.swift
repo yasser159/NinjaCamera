@@ -15,18 +15,20 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             background
-            VStack(spacing: 16) {
-                header
-                statusPanel
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 16) {
+                    header
+                    statusPanel
+                modePicker
                 actionRow
                 modeToggles
                 timeLapseControls
-                confirmationControls
+                // confirmationControls
                 complianceNote
-                Spacer(minLength: 0)
+                }
+                .padding(20)
+                .foregroundStyle(.white)
             }
-            .padding(20)
-            .foregroundStyle(.white)
         }
         .onAppear { viewModel.startSession() }
         .onDisappear { viewModel.stopSession() }
@@ -45,18 +47,14 @@ struct ContentView: View {
 
     private var background: some View {
         Group {
-            if viewModel.isDiscreetMode {
-                Color.black
-            } else {
-                LinearGradient(colors: [Color.black, Color.gray.opacity(0.6)], startPoint: .top, endPoint: .bottom)
-            }
+            Color.black
         }
         .ignoresSafeArea()
     }
 
     private var header: some View {
         VStack(spacing: 6) {
-            Text("Discreet Camera")
+            Text("Zero Camera")
                 .font(.system(size: 24, weight: .semibold, design: .rounded))
             Text("Minimal capture controls")
                 .font(.system(size: 14, weight: .regular, design: .rounded))
@@ -82,45 +80,78 @@ struct ContentView: View {
     }
 
     private var actionRow: some View {
-        HStack(spacing: 12) {
-            Button(action: { viewModel.capturePhoto() }) {
-                Label("Photo", systemImage: "camera")
+        Button(action: {
+            if isModeActive {
+                viewModel.stopSelectedMode()
+            } else {
+                viewModel.startSelectedMode()
             }
-            .buttonStyle(PrimaryActionStyle())
+        }) {
+            Label(isModeActive ? "Stop" : "Start", systemImage: isModeActive ? "stop.fill" : "play.fill")
+        }
+        .buttonStyle(PrimaryActionStyle())
+    }
 
-            Button(action: {
-                viewModel.isRecording ? viewModel.stopRecording() : viewModel.startRecording()
-            }) {
-                Label(viewModel.isRecording ? "Stop" : "Video", systemImage: viewModel.isRecording ? "stop.fill" : "video")
+    private var modePicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Capture mode", systemImage: "slider.horizontal.3")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.7))
+            HStack(spacing: 10) {
+                ForEach(CameraViewModel.CaptureMode.allCases) { mode in
+                    Button(action: {
+                        viewModel.selectedMode = mode
+                        viewModel.stopAllCaptureModes()
+                    }) {
+                        VStack(spacing: 4) {
+                            Image(systemName: modeSymbol(mode))
+                                .font(.system(size: 16, weight: .semibold))
+                            Text(mode.rawValue)
+                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(viewModel.selectedMode == mode ? Color.white : Color.white.opacity(0.12))
+                        .foregroundStyle(viewModel.selectedMode == mode ? .black : .white)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .accessibilityLabel(Text(mode.rawValue))
+                }
             }
-            .buttonStyle(SecondaryActionStyle(isActive: viewModel.isRecording))
+        }
+    }
+
+    private func modeSymbol(_ mode: CameraViewModel.CaptureMode) -> String {
+        switch mode {
+        case .photo:
+            return "camera"
+        case .video:
+            return "video"
+        case .timeLapse:
+            return "timer"
+        case .faceDetection:
+            return "faceid"
+        case .voice:
+            return "mic"
         }
     }
 
     private var modeToggles: some View {
         VStack(spacing: 12) {
-            Toggle("Screen-off capture (dim screen)", isOn: Binding(get: {
+            Toggle(isOn: Binding(get: {
                 viewModel.isDiscreetMode
             }, set: { value in
                 viewModel.setDiscreetMode(value)
-            }))
-            Toggle("Voice commands", isOn: Binding(get: {
-                viewModel.isVoiceEnabled
-            }, set: { value in
-                viewModel.setVoiceEnabled(value)
-            }))
-            Toggle("Time-lapse", isOn: Binding(get: {
-                viewModel.isTimeLapseEnabled
-            }, set: { value in
-                viewModel.toggleTimeLapse(value)
-            }))
+            })) {
+                Label("Screen-off capture (dim screen)", systemImage: "eye.slash")
+            }
         }
         .toggleStyle(SwitchToggleStyle(tint: .white))
     }
 
     private var timeLapseControls: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Time-lapse interval")
+            Label("Time-lapse interval", systemImage: "timer")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.7))
             Picker("Interval", selection: $viewModel.timeLapseInterval) {
@@ -129,20 +160,35 @@ struct ContentView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .onChange(of: viewModel.timeLapseInterval) { _ in
-                if viewModel.isTimeLapseEnabled {
+            .onChange(of: viewModel.timeLapseInterval) { _, _ in
+                if viewModel.selectedMode == .timeLapse, viewModel.isTimeLapseEnabled {
                     viewModel.startTimeLapse()
                 }
+                if viewModel.selectedMode == .faceDetection, viewModel.isFaceDetectionEnabled {
+                    viewModel.setFaceDetectionEnabled(true)
+                }
+            }
+            if viewModel.isTimeLapseEnabled || viewModel.isFaceDetectionEnabled {
+                Text("Next shot in -\(viewModel.timeLapseCountdown)s")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.7))
             }
         }
     }
 
-    private var confirmationControls: some View {
-        VStack(spacing: 12) {
-            Toggle("Haptic confirmation", isOn: $viewModel.hapticsEnabled)
-            Toggle("Audio confirmation", isOn: $viewModel.audioConfirmationEnabled)
+    private var isModeActive: Bool {
+        switch viewModel.selectedMode {
+        case .photo:
+            return false
+        case .video:
+            return viewModel.isRecording
+        case .timeLapse:
+            return viewModel.isTimeLapseEnabled
+        case .faceDetection:
+            return viewModel.isFaceDetectionEnabled
+        case .voice:
+            return viewModel.isVoiceEnabled
         }
-        .toggleStyle(SwitchToggleStyle(tint: .white))
     }
 
     private var complianceNote: some View {
