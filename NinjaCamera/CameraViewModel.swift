@@ -369,7 +369,7 @@ final class CameraViewModel: NSObject, ObservableObject {
             isVoiceEnabled = true
             startVoiceRecognition()
         } else {
-            stopVoiceRecognition()
+            stopVoiceRecognition(keepEnabled: false)
         }
     }
 
@@ -399,7 +399,7 @@ final class CameraViewModel: NSObject, ObservableObject {
                 return
             }
 
-            self.stopVoiceRecognition()
+            self.stopVoiceRecognition(keepEnabled: true)
             self.speechRequest = SFSpeechAudioBufferRecognitionRequest()
             if let recognizer = self.speechRecognizer, recognizer.supportsOnDeviceRecognition {
                 self.speechRequest?.requiresOnDeviceRecognition = true
@@ -454,10 +454,11 @@ final class CameraViewModel: NSObject, ObservableObject {
             self.speechTask = self.speechRecognizer?.recognitionTask(with: self.speechRequest!) { [weak self] result, error in
                 guard let self else { return }
                 if let error = error {
-                    let nsError = error as NSError
-                    if !self.isVoiceEnabled ||
-                        (nsError.domain == SFSpeechRecognizerErrorDomain &&
-                         nsError.code == SFSpeechRecognizerErrorCode.canceled.rawValue) {
+                    if !self.isVoiceEnabled {
+                        return
+                    }
+                    if self.shouldRestartSpeechRecognition(for: error) {
+                        self.restartVoiceRecognition()
                         return
                     }
                     self.fail("Speech error: \(error.localizedDescription)")
@@ -470,7 +471,7 @@ final class CameraViewModel: NSObject, ObservableObject {
         }
     }
 
-    private func stopVoiceRecognition() {
+    private func stopVoiceRecognition(keepEnabled: Bool = true) {
         speechTask?.cancel()
         speechTask = nil
         speechRequest?.endAudio()
@@ -478,8 +479,22 @@ final class CameraViewModel: NSObject, ObservableObject {
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
         configureAmbientAudioSession()
-        if isVoiceEnabled {
+        if !keepEnabled, isVoiceEnabled {
             isVoiceEnabled = false
+        }
+    }
+
+    private func shouldRestartSpeechRecognition(for error: Error) -> Bool {
+        let description = (error as NSError).localizedDescription.lowercased()
+        return description.contains("no speech")
+    }
+
+    private func restartVoiceRecognition() {
+        stopVoiceRecognition(keepEnabled: true)
+        guard isVoiceEnabled else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self, self.isVoiceEnabled else { return }
+            self.startVoiceRecognition()
         }
     }
 
@@ -507,7 +522,7 @@ final class CameraViewModel: NSObject, ObservableObject {
 
     @objc private func appWillResignActive() {
         stopTimeLapse()
-        stopVoiceRecognition()
+        stopVoiceRecognition(keepEnabled: false)
         stopSession()
         if isVoiceEnabled {
             isVoiceEnabled = false
