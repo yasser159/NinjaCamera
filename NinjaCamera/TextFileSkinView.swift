@@ -18,6 +18,8 @@ struct TextFileSkinView: View {
     private let tapHoldDuration: TimeInterval = 2
 
     @State private var transientActiveActions: Set<StoryAction> = []
+    @State private var noteText: String = ""
+    @FocusState private var notesFocused: Bool
     @State private var transientStatusText: String?
     @State private var statusWorkItem: DispatchWorkItem?
 
@@ -112,13 +114,26 @@ struct TextFileSkinView: View {
     }
 
     private var statusBlock: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField("notes...", text: $noteText, axis: .vertical)
+                .font(.system(size: 16, weight: .regular, design: .monospaced))
+                .foregroundStyle(manuscriptStyle.primaryText)
+                .textInputAutocapitalization(.sentences)
+                .disableAutocorrection(false)
+                .focused($notesFocused)
+                .lineLimit(4, reservesSpace: true)
+                .frame(minHeight: 88, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    notesFocused = true
+                }
+                .padding(.horizontal, 2)
             if let transientStatusText {
                 Text(transientStatusText)
-                    .font(.system(size: 12, weight: .regular, design: .monospaced))
+                    .font(.system(size: 11, weight: .regular, design: .monospaced))
                     .foregroundStyle(manuscriptStyle.secondaryText)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 2)
             }
         }
     }

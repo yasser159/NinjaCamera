@@ -104,7 +104,11 @@ final class CameraViewModel: NSObject, ObservableObject {
 
             guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
                 Task { @MainActor in
+#if targetEnvironment(simulator)
+                    self.statusMessage = "Simulator mode"
+#else
                     self.fail("No back ping sensor available")
+#endif
                 }
                 return
             }
