@@ -12,6 +12,8 @@ struct TextFileSkinView: View {
     @Binding var selectedSkin: CameraSkin
     let style: CameraSkinStyle
 
+    @Environment(\.colorScheme) private var colorScheme
+
     private let intervals: [Double] = [5, 15, 30, 45, 60]
     private let tapHoldDuration: TimeInterval = 2
 
@@ -20,8 +22,9 @@ struct TextFileSkinView: View {
     @State private var statusWorkItem: DispatchWorkItem?
 
     var body: some View {
+        let activeStyle = manuscriptStyle
         ZStack {
-            style.background
+            activeStyle.background
                 .ignoresSafeArea()
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
@@ -53,12 +56,9 @@ struct TextFileSkinView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("NinjaCamera.log")
-                .font(.system(size: 18, weight: .semibold, design: .monospaced))
-                .foregroundStyle(style.primaryText)
             Text("Session notes, tap words to act")
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(style.secondaryText)
+                .foregroundStyle(manuscriptStyle.secondaryText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -67,16 +67,14 @@ struct TextFileSkinView: View {
         HStack(spacing: 8) {
             Text("skins:")
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(style.secondaryText)
+                .foregroundStyle(manuscriptStyle.secondaryText)
             ForEach(CameraSkin.allCases) { skin in
                 Button(action: { selectedSkin = skin }) {
                     Text(skin.displayName.lowercased())
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(selectedSkin == skin ? style.accentForeground : style.primaryText)
+                        .font(.system(size: 12, weight: selectedSkin == skin ? .bold : .regular, design: .monospaced))
+                        .foregroundStyle(manuscriptStyle.primaryText)
                         .padding(.vertical, 2)
-                        .padding(.horizontal, 6)
-                        .background(selectedSkin == skin ? style.accent : style.panelMuted)
-                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        .padding(.horizontal, 4)
                 }
                 .buttonStyle(.plain)
             }
@@ -96,7 +94,7 @@ struct TextFileSkinView: View {
                         Button(action: { perform(action) }) {
                             Text(token.text)
                                 .font(.system(size: 16, weight: isActive ? .heavy : .regular, design: .monospaced))
-                                .foregroundStyle(style.primaryText)
+                                .foregroundStyle(manuscriptStyle.primaryText)
                                 .padding(.vertical, 2)
                                 .padding(.horizontal, 2)
                         }
@@ -104,17 +102,17 @@ struct TextFileSkinView: View {
                     } else {
                         Text(token.text)
                             .font(.system(size: 16, weight: .regular, design: .monospaced))
-                            .foregroundStyle(style.primaryText)
+                            .foregroundStyle(manuscriptStyle.primaryText)
                     }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Text("Tip: tap a mode word first, then tap start.")
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(style.secondaryText)
+                .foregroundStyle(manuscriptStyle.secondaryText)
         }
         .padding(16)
-        .background(style.panel)
+        .background(manuscriptStyle.panel)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
@@ -123,7 +121,7 @@ struct TextFileSkinView: View {
             if let transientStatusText {
                 Text(transientStatusText)
                     .font(.system(size: 12, weight: .regular, design: .monospaced))
-                    .foregroundStyle(style.secondaryText)
+                    .foregroundStyle(manuscriptStyle.secondaryText)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 2)
             }
@@ -133,12 +131,47 @@ struct TextFileSkinView: View {
     private var statusColor: Color {
         switch viewModel.captureState {
         case .idle:
-            return style.statusIdle
+            return manuscriptStyle.statusIdle
         case .capturing, .timeLapse:
-            return style.statusActive
+            return manuscriptStyle.statusActive
         case .error:
-            return style.statusError
+            return manuscriptStyle.statusError
         }
+    }
+
+    private var manuscriptStyle: CameraSkinStyle {
+        if colorScheme == .dark {
+            return CameraSkinStyle(
+                background: LinearGradient(
+                    colors: [
+                        Color(red: 0.08, green: 0.08, blue: 0.09),
+                        Color(red: 0.12, green: 0.12, blue: 0.14)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                primaryText: Color(red: 0.94, green: 0.93, blue: 0.90),
+                secondaryText: Color(red: 0.78, green: 0.76, blue: 0.72),
+                panel: Color.white.opacity(0.06),
+                panelMuted: Color.white.opacity(0.08),
+                panelStrong: Color.white.opacity(0.12),
+                accent: Color(red: 0.94, green: 0.93, blue: 0.90),
+                accentForeground: Color(red: 0.10, green: 0.10, blue: 0.10),
+                danger: Color(red: 0.82, green: 0.34, blue: 0.26),
+                dangerForeground: .black,
+                actionButtonBackground: Color.white.opacity(0.12),
+                actionButtonText: Color(red: 0.94, green: 0.93, blue: 0.90),
+                sliderTrack: Color.white.opacity(0.08),
+                coverColor: Color.black.opacity(0.8),
+                statusIdle: Color(red: 0.42, green: 0.78, blue: 0.62),
+                statusActive: Color(red: 0.86, green: 0.68, blue: 0.32),
+                statusError: Color(red: 0.88, green: 0.36, blue: 0.28),
+                pickerTint: Color(red: 0.94, green: 0.93, blue: 0.90),
+                pickerScheme: .dark
+            )
+        }
+
+        return style
     }
 
     private func perform(_ action: StoryAction) {

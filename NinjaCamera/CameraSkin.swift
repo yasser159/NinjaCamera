@@ -9,8 +9,6 @@ import SwiftUI
 
 enum CameraSkin: String, CaseIterable, Identifiable {
     case stealth
-    case ember
-    case arctic
     case manuscript
 
     var id: String { rawValue }
@@ -19,10 +17,6 @@ enum CameraSkin: String, CaseIterable, Identifiable {
         switch self {
         case .stealth:
             return "Stealth"
-        case .ember:
-            return "Ember"
-        case .arctic:
-            return "Arctic"
         case .manuscript:
             return "Manuscript"
         }
@@ -54,66 +48,6 @@ enum CameraSkin: String, CaseIterable, Identifiable {
                 statusActive: .yellow,
                 statusError: .orange,
                 pickerTint: .white,
-                pickerScheme: .dark
-            )
-        case .ember:
-            return CameraSkinStyle(
-                background: LinearGradient(
-                    colors: [
-                        Color(red: 0.10, green: 0.05, blue: 0.02),
-                        Color(red: 0.35, green: 0.12, blue: 0.05),
-                        Color(red: 0.06, green: 0.09, blue: 0.18)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                primaryText: Color(red: 0.99, green: 0.95, blue: 0.90),
-                secondaryText: Color(red: 0.99, green: 0.91, blue: 0.82, opacity: 0.7),
-                panel: Color.black.opacity(0.25),
-                panelMuted: Color(red: 0.98, green: 0.74, blue: 0.42, opacity: 0.18),
-                panelStrong: Color(red: 0.98, green: 0.74, blue: 0.42),
-                accent: Color(red: 0.98, green: 0.74, blue: 0.42),
-                accentForeground: Color(red: 0.18, green: 0.07, blue: 0.02),
-                danger: Color(red: 0.92, green: 0.26, blue: 0.18),
-                dangerForeground: .white,
-                actionButtonBackground: Color(red: 0.98, green: 0.74, blue: 0.42, opacity: 0.2),
-                actionButtonText: Color(red: 0.99, green: 0.95, blue: 0.90),
-                sliderTrack: Color.black.opacity(0.22),
-                coverColor: Color.black.opacity(0.78),
-                statusIdle: Color(red: 0.38, green: 0.82, blue: 0.62),
-                statusActive: Color(red: 0.98, green: 0.78, blue: 0.36),
-                statusError: Color(red: 0.97, green: 0.33, blue: 0.20),
-                pickerTint: Color(red: 0.98, green: 0.74, blue: 0.42),
-                pickerScheme: .dark
-            )
-        case .arctic:
-            return CameraSkinStyle(
-                background: LinearGradient(
-                    colors: [
-                        Color(red: 0.02, green: 0.12, blue: 0.18),
-                        Color(red: 0.08, green: 0.30, blue: 0.38),
-                        Color(red: 0.03, green: 0.15, blue: 0.25)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                primaryText: Color(red: 0.90, green: 0.98, blue: 1.0),
-                secondaryText: Color(red: 0.84, green: 0.95, blue: 0.98, opacity: 0.7),
-                panel: Color.white.opacity(0.10),
-                panelMuted: Color.white.opacity(0.18),
-                panelStrong: Color(red: 0.70, green: 0.95, blue: 1.0),
-                accent: Color(red: 0.70, green: 0.95, blue: 1.0),
-                accentForeground: Color(red: 0.03, green: 0.15, blue: 0.20),
-                danger: Color(red: 0.95, green: 0.34, blue: 0.32),
-                dangerForeground: .white,
-                actionButtonBackground: Color.white.opacity(0.16),
-                actionButtonText: Color(red: 0.90, green: 0.98, blue: 1.0),
-                sliderTrack: Color.white.opacity(0.1),
-                coverColor: Color.black.opacity(0.82),
-                statusIdle: Color(red: 0.35, green: 0.92, blue: 0.82),
-                statusActive: Color(red: 0.98, green: 0.82, blue: 0.50),
-                statusError: Color(red: 0.97, green: 0.36, blue: 0.32),
-                pickerTint: Color(red: 0.70, green: 0.95, blue: 1.0),
                 pickerScheme: .dark
             )
         case .manuscript:
