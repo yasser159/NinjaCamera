@@ -107,13 +107,8 @@ struct TextFileSkinView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text("Tip: tap a mode word first, then tap start.")
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(manuscriptStyle.secondaryText)
         }
-        .padding(16)
-        .background(manuscriptStyle.panel)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.vertical, 8)
     }
 
     private var statusBlock: some View {
