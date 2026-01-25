@@ -16,12 +16,12 @@ struct TextFileSkinView: View {
 
     private let intervals: [Double] = [5, 15, 30, 45, 60]
     private let tapHoldDuration: TimeInterval = 2
-
     @State private var transientActiveActions: Set<StoryAction> = []
     @State private var noteText: String = ""
     @FocusState private var notesFocused: Bool
     @State private var transientStatusText: String?
     @State private var statusWorkItem: DispatchWorkItem?
+    @State private var intervalOptionsVisible = false
 
     var body: some View {
         let activeStyle = manuscriptStyle
@@ -109,6 +109,10 @@ struct TextFileSkinView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            if intervalOptionsVisible {
+                intervalSelectionLine
+                    .transition(.opacity)
+            }
         }
         .padding(.vertical, 8)
     }
@@ -200,18 +204,7 @@ struct TextFileSkinView: View {
         case .toggleDiscreet:
             viewModel.setDiscreetMode(!viewModel.isDiscreetMode)
         case .cycleInterval:
-            guard let idx = intervals.firstIndex(of: viewModel.timeLapseInterval) else {
-                viewModel.timeLapseInterval = intervals[0]
-                return
-            }
-            let next = intervals[(idx + 1) % intervals.count]
-            viewModel.timeLapseInterval = next
-            if viewModel.selectedMode == .timeLapse, viewModel.isTimeLapseEnabled {
-                viewModel.startTimeLapse()
-            }
-            if viewModel.selectedMode == .faceDetection, viewModel.isFaceDetectionEnabled {
-                viewModel.setFaceDetectionEnabled(true)
-            }
+            showIntervalOptions()
         }
     }
 
@@ -233,6 +226,33 @@ struct TextFileSkinView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + tapHoldDuration, execute: workItem)
     }
 
+    private func showIntervalOptions() {
+        withAnimation(.easeOut(duration: 0.2)) {
+            intervalOptionsVisible = true
+        }
+    }
+
+    private func selectInterval(_ interval: Double) {
+        viewModel.timeLapseInterval = interval
+        if viewModel.selectedMode == .timeLapse, viewModel.isTimeLapseEnabled {
+            viewModel.startTimeLapse()
+        }
+        if viewModel.selectedMode == .faceDetection, viewModel.isFaceDetectionEnabled {
+            viewModel.setFaceDetectionEnabled(true)
+        }
+        showStatusLine("interval set: \(intervalWords(for: interval))")
+        withAnimation(.easeOut(duration: 0.2)) {
+            intervalOptionsVisible = false
+        }
+    }
+
+    private func cancelIntervalSelection() {
+        withAnimation(.easeOut(duration: 0.2)) {
+            intervalOptionsVisible = false
+        }
+        showStatusLine("interval selection canceled")
+    }
+
     private func statusLine(for action: StoryAction) -> String {
         switch action {
         case .setMode(let mode):
@@ -246,7 +266,57 @@ struct TextFileSkinView: View {
         case .toggleDiscreet:
             return viewModel.isDiscreetMode ? "discreet off" : "discreet on"
         case .cycleInterval:
-            return "interval: \(Int(viewModel.timeLapseInterval))s"
+            return "intervals: \(intervals.map { intervalWords(for: $0) }.joined(separator: ", "))"
+        }
+    }
+
+    private var intervalSelectionLine: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                Text("intervals:")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(manuscriptStyle.secondaryText)
+                ForEach(intervals, id: \.self) { interval in
+                    let isSelected = viewModel.timeLapseInterval == interval
+                    Button(action: { selectInterval(interval) }) {
+                        Text(intervalWords(for: interval))
+                            .font(.system(size: 12, weight: isSelected ? .bold : .regular, design: .monospaced))
+                            .foregroundStyle(manuscriptStyle.primaryText)
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 6)
+                            .background(isSelected ? manuscriptStyle.panelStrong : manuscriptStyle.panel)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+                Button(action: { cancelIntervalSelection() }) {
+                    Text("cancel")
+                        .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .foregroundStyle(manuscriptStyle.secondaryText)
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 6)
+                        .background(manuscriptStyle.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func intervalWords(for interval: Double) -> String {
+        switch Int(interval.rounded()) {
+        case 5:
+            return "five seconds"
+        case 15:
+            return "fifteen seconds"
+        case 30:
+            return "thirty seconds"
+        case 45:
+            return "forty-five seconds"
+        case 60:
+            return "sixty seconds"
+        default:
+            return "\(Int(interval)) seconds"
         }
     }
 
