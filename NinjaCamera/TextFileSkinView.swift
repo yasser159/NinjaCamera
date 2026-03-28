@@ -14,7 +14,7 @@ struct TextFileSkinView: View {
 
     @Environment(\.colorScheme) private var colorScheme
 
-    private let intervals: [Double] = [5, 15, 30, 45, 60]
+    private let intervals: [Double] = [2, 5, 15, 30, 45, 60]
     private let tapHoldDuration: TimeInterval = 2
     @State private var transientActiveActions: Set<StoryAction> = []
     @State private var noteText: String = ""
@@ -22,6 +22,7 @@ struct TextFileSkinView: View {
     @State private var transientStatusText: String?
     @State private var statusWorkItem: DispatchWorkItem?
     @State private var intervalOptionsVisible = false
+    @State private var diagnosticsPresented = false
 
     var body: some View {
         let activeStyle = manuscriptStyle
@@ -39,9 +40,11 @@ struct TextFileSkinView: View {
             }
         }
         .onAppear { viewModel.startSession() }
-        .onDisappear { viewModel.stopSession() }
         .onChange(of: viewModel.statusMessage) { _, newValue in
             showStatusLine(newValue)
+        }
+        .sheet(isPresented: $diagnosticsPresented) {
+            DiagnosticsScreen(viewModel: viewModel)
         }
         .alert("Issue", isPresented: Binding(get: {
             viewModel.lastError != nil
@@ -58,9 +61,18 @@ struct TextFileSkinView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Session notes, tap words to act")
+            HStack {
+                Text("Session notes, tap words to act")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(manuscriptStyle.secondaryText)
+                Spacer()
+                Button("logs") {
+                    diagnosticsPresented = true
+                }
+                .buttonStyle(.plain)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(manuscriptStyle.secondaryText)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -305,6 +317,8 @@ struct TextFileSkinView: View {
 
     private func intervalWords(for interval: Double) -> String {
         switch Int(interval.rounded()) {
+        case 2:
+            return "two seconds"
         case 5:
             return "five seconds"
         case 15:

@@ -1,10 +1,3 @@
-//
-//  CameraViewModel.swift
-//  NinjaCamera
-//
-//  Created by Codex on 1/18/26.
-//
-
 import AVFoundation
 import AudioToolbox
 import Combine
@@ -31,11 +24,24 @@ final class CameraViewModel: NSObject, ObservableObject {
         case error = "Error"
     }
 
+    enum BugReportSubmissionResult {
+        case success(BugReportResponse)
+        case failure(Error)
+    }
+
     @Published var captureState: CaptureState = .idle
     @Published var statusMessage: String = "Ready"
     @Published var isVoiceEnabled = false
     @Published var isTimeLapseEnabled = false
-    @Published var timeLapseInterval: Double = 15
+    @Published var timeLapseInterval: Double {
+        didSet {
+            defaults.set(timeLapseInterval, forKey: Self.timeLapseIntervalDefaultsKey)
+            diagnosticsStore.log(subsystem: "timelapse", message: "Selected interval changed", metadata: [
+                "interval": String(Int(timeLapseInterval))
+            ])
+            timeLapseEngine.updateInterval(timeLapseInterval)
+        }
+    }
     @Published var isDiscreetMode = false
     @Published var hapticsEnabled = true
     @Published var audioConfirmationEnabled = false
@@ -45,25 +51,24 @@ final class CameraViewModel: NSObject, ObservableObject {
     @Published var isFaceDetectionEnabled = false
     @Published var photoCount: Int = 0
     @Published var selectedMode: CaptureMode = .timeLapse
+    @Published var lastBugReportMessage = ""
 
-    nonisolated(unsafe) private let session = AVCaptureSession()
-    nonisolated(unsafe) private let photoOutput = AVCapturePhotoOutput()
-    nonisolated(unsafe) private let metadataOutput = AVCaptureMetadataOutput()
-    private let sessionQueue = DispatchQueue(label: "ninjacamera.session.queue")
-    private let metadataQueue = DispatchQueue(label: "ninjacamera.metadata.queue")
-    private var timeLapseTimer: Timer?
-    private var lastFaceCaptureDate: Date = .distantPast
-    private let faceCaptureCooldown: TimeInterval = 3
-    private var intervalMode: CaptureMode?
-    private var isFacePresent = false
+    let diagnosticsStore: DiagnosticsStore
+    let backgroundCoordinator: BackgroundCaptureCoordinator
+
+    private let defaults: UserDefaults
+    private let captureService: CameraCaptureService
+    private let bugReportService: BugReportService
+    private lazy var timeLapseEngine: TimeLapseEngine = makeTimeLapseEngine()
 
     private let audioEngine = AVAudioEngine()
     private var speechRequest: SFSpeechAudioBufferRecognitionRequest?
     private var speechTask: SFSpeechRecognitionTask?
     private let speechRecognizer = SFSpeechRecognizer()
     private var lastCommandTimestamp: Date = .distantPast
-
+    private var isFacePresent = false
     private var originalBrightness: CGFloat?
+
     private var activeScreen: UIScreen? {
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
@@ -71,90 +76,45 @@ final class CameraViewModel: NSObject, ObservableObject {
             .screen
     }
 
-    override init() {
+    private static let timeLapseIntervalDefaultsKey = "timelapse.interval.seconds"
+
+    override convenience init() {
+        self.init(
+            diagnosticsStore: DiagnosticsStore(),
+            bugReportService: BugReportService(),
+            defaults: .standard
+        )
+    }
+
+    init(
+        diagnosticsStore: DiagnosticsStore,
+        bugReportService: BugReportService,
+        defaults: UserDefaults = .standard
+    ) {
+        self.diagnosticsStore = diagnosticsStore
+        self.bugReportService = bugReportService
+        self.defaults = defaults
+        let savedInterval = max(1, (defaults.object(forKey: Self.timeLapseIntervalDefaultsKey) as? Double ?? 2).rounded())
+        self.timeLapseInterval = savedInterval
+        self.captureService = CameraCaptureService(diagnostics: diagnosticsStore)
+        self.backgroundCoordinator = BackgroundCaptureCoordinator(diagnostics: diagnosticsStore)
+
         super.init()
+        configureServices()
         configureAmbientAudioSession()
+
         NotificationCenter.default.addObserver(self, selector: #selector(appWillResignActive), name: UIApplication.willResignActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appWillEnterForeground), name: UIApplication.willEnterForegroundNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
+
+        diagnosticsStore.log(subsystem: "app", message: "CameraViewModel initialized", metadata: [
+            "defaultInterval": String(Int(savedInterval.rounded()))
+        ])
     }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
-    }
-
-    func configureSessionIfNeeded(completion: (() -> Void)? = nil) {
-        guard !isSessionConfigured else {
-            completion?()
-            return
-        }
-
-        // Capture main-actor isolated state before hopping to the session queue
-        let faceDetectionEnabledAtConfig = self.isFaceDetectionEnabled
-
-        sessionQueue.async {
-            if self.session.isRunning {
-                self.session.stopRunning()
-            }
-            self.session.beginConfiguration()
-            defer { self.session.commitConfiguration() }
-
-            self.session.inputs.forEach { self.session.removeInput($0) }
-            self.session.outputs.forEach { self.session.removeOutput($0) }
-            self.session.sessionPreset = .photo
-
-            guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
-                Task { @MainActor in
-#if targetEnvironment(simulator)
-                    self.statusMessage = "Simulator mode"
-#else
-                    self.fail("No back ping sensor available")
-#endif
-                }
-                return
-            }
-
-            do {
-                let videoInput = try AVCaptureDeviceInput(device: videoDevice)
-                if self.session.canAddInput(videoInput) {
-                    self.session.addInput(videoInput)
-                } else {
-                    Task { @MainActor in self.fail("Unable to add eye input") }
-                    return
-                }
-
-                if self.session.canAddOutput(self.photoOutput) {
-                    self.session.addOutput(self.photoOutput)
-                }
-
-                if self.session.canAddOutput(self.metadataOutput) {
-                    self.session.addOutput(self.metadataOutput)
-                }
-
-                self.metadataOutput.setMetadataObjectsDelegate(self, queue: self.metadataQueue)
-                if faceDetectionEnabledAtConfig,
-                   self.metadataOutput.availableMetadataObjectTypes.contains(.face) {
-                    self.metadataOutput.metadataObjectTypes = [.face]
-                } else {
-                    self.metadataOutput.metadataObjectTypes = []
-                }
-
-                // Prefer supported max photo dimensions (iOS 16+)
-                if #available(iOS 16.0, *) {
-                    if let maxDimensions = videoDevice.activeFormat.supportedMaxPhotoDimensions.last {
-                        self.photoOutput.maxPhotoDimensions = maxDimensions
-                    }
-                }
-
-                Task { @MainActor in
-                    self.isSessionConfigured = true
-                    completion?()
-                }
-            } catch {
-                Task { @MainActor in
-                    self.fail("Eye configuration failed: \(error.localizedDescription)")
-                }
-            }
-        }
     }
 
     func startSession() {
@@ -164,51 +124,41 @@ final class CameraViewModel: NSObject, ObservableObject {
                 self.fail("Eye permission is required")
                 return
             }
-            let faceEnabled = self.isFaceDetectionEnabled
-            self.configureSessionIfNeeded {
-                self.sessionQueue.async {
-                    if !self.session.isRunning {
-                        self.session.startRunning()
-                    }
-                    if faceEnabled {
-                        self.configureFaceMetadataTypes()
-                    }
+
+            self.captureService.configureIfNeeded {
+                self.captureService.startSession()
+                if self.isFaceDetectionEnabled {
+                    self.captureService.setFaceDetectionEnabled(true)
                 }
             }
         }
     }
 
-    func stopSession() {
-        sessionQueue.async {
-            if self.session.isRunning {
-                self.session.stopRunning()
-            }
+    func stopSession(reason: String = "manual") {
+        guard !isBackgroundCaptureEligible else {
+            diagnosticsStore.log(subsystem: "camera", message: "Stop session ignored while background capture is eligible", metadata: [
+                "reason": reason
+            ])
+            return
         }
+        captureService.stopSession(reason: reason)
     }
 
     func capturePhoto() {
-        guard isSessionConfigured else { return }
+        guard isSessionConfigured else {
+            diagnosticsStore.warning(subsystem: "camera", message: "Capture ignored because session is not configured")
+            return
+        }
         captureState = .capturing
         statusMessage = "Capturing ping"
         emitConfirmation()
-
-        sessionQueue.async {
-            let settings: AVCapturePhotoSettings
-            if self.photoOutput.availablePhotoCodecTypes.contains(.jpeg) {
-                settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
-            } else {
-                settings = AVCapturePhotoSettings()
-            }
-            settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
-            self.photoOutput.capturePhoto(with: settings, delegate: self)
-        }
+        captureService.capturePhoto()
     }
-
-    // Video recording removed.
 
     func startSelectedMode() {
         switch selectedMode {
         case .photo:
+            startSession()
             capturePhoto()
         case .timeLapse:
             if !isTimeLapseEnabled {
@@ -248,110 +198,19 @@ final class CameraViewModel: NSObject, ObservableObject {
         setVoiceEnabled(false)
     }
 
-    func toggleTimeLapse(_ enabled: Bool) {
-        if enabled {
-            disableOtherModes(except: .timeLapse)
-            isTimeLapseEnabled = true
-            startTimeLapse()
-        } else {
-            stopTimeLapse()
-        }
-    }
-
     func startTimeLapse() {
-        guard isSessionConfigured else { return }
+        startSession()
+        isTimeLapseEnabled = true
         captureState = .timeLapse
         statusMessage = "Time-lapse running"
-
-        startIntervalCapture(mode: .timeLapse)
-    }
-
-    @objc private func handleTimeLapseTick() {
-        if timeLapseCountdown <= 1 {
-            let shouldCapture: Bool
-            switch intervalMode {
-            case .timeLapse:
-                shouldCapture = true
-            case .faceDetection:
-                shouldCapture = isFacePresent
-            default:
-                shouldCapture = false
-            }
-
-            if shouldCapture {
-                capturePhoto()
-            }
-            timeLapseCountdown = max(1, Int(timeLapseInterval.rounded()))
-        } else {
-            timeLapseCountdown -= 1
-        }
+        timeLapseEngine.start(mode: .timeLapse, interval: timeLapseInterval)
     }
 
     func stopTimeLapse() {
-        stopIntervalCapture()
-        if isTimeLapseEnabled {
-            isTimeLapseEnabled = false
-        }
+        timeLapseEngine.stop()
+        isTimeLapseEnabled = false
         captureState = .idle
         statusMessage = "Ready"
-    }
-
-    private func startIntervalCapture(mode: CaptureMode) {
-        intervalMode = mode
-        timeLapseTimer?.invalidate()
-        timeLapseCountdown = max(1, Int(timeLapseInterval.rounded()))
-        timeLapseTimer = Timer.scheduledTimer(timeInterval: 1, target: self, selector: #selector(handleTimeLapseTick), userInfo: nil, repeats: true)
-    }
-
-    private func stopIntervalCapture() {
-        intervalMode = nil
-        timeLapseTimer?.invalidate()
-        timeLapseTimer = nil
-        timeLapseCountdown = 0
-    }
-
-    private func disableOtherModes(except mode: CaptureMode) {
-        if isVoiceEnabled {
-            isVoiceEnabled = false
-            stopVoiceRecognition()
-        }
-        if mode != .timeLapse, isTimeLapseEnabled {
-            stopTimeLapse()
-        }
-        if mode != .faceDetection, isFaceDetectionEnabled {
-            isFaceDetectionEnabled = false
-            updateFaceDetectionOutput(enabled: false)
-        }
-    }
-
-    private func updateFaceDetectionOutput(enabled: Bool) {
-        sessionQueue.async {
-            self.session.beginConfiguration()
-            defer { self.session.commitConfiguration() }
-
-            if !self.session.outputs.contains(self.metadataOutput),
-               self.session.canAddOutput(self.metadataOutput) {
-                self.session.addOutput(self.metadataOutput)
-            }
-
-            if enabled, self.metadataOutput.availableMetadataObjectTypes.contains(.face) {
-                self.metadataOutput.metadataObjectTypes = [.face]
-            } else {
-                self.metadataOutput.metadataObjectTypes = []
-            }
-        }
-    }
-
-    nonisolated private func configureFaceMetadataTypes(retryCount: Int = 0) {
-        if metadataOutput.availableMetadataObjectTypes.contains(.face) {
-            metadataOutput.metadataObjectTypes = [.face]
-            return
-        }
-        if retryCount < 5 {
-            sessionQueue.asyncAfter(deadline: .now() + 0.3) {
-                self.configureFaceMetadataTypes(retryCount: retryCount + 1)
-            }
-        }
     }
 
     func setDiscreetMode(_ enabled: Bool) {
@@ -360,10 +219,13 @@ final class CameraViewModel: NSObject, ObservableObject {
                 originalBrightness = activeScreen?.brightness
             }
             activeScreen?.brightness = 0.05
-        } else if let original = originalBrightness {
-            activeScreen?.brightness = original
-            originalBrightness = nil
+        } else if let originalBrightness {
+            activeScreen?.brightness = originalBrightness
+            self.originalBrightness = nil
         }
+        diagnosticsStore.log(subsystem: "ui", message: "Discreet mode changed", metadata: [
+            "enabled": String(enabled)
+        ])
         isDiscreetMode = enabled
     }
 
@@ -379,20 +241,115 @@ final class CameraViewModel: NSObject, ObservableObject {
 
     func setFaceDetectionEnabled(_ enabled: Bool) {
         if enabled {
-            disableOtherModes(except: .faceDetection)
+            if isTimeLapseEnabled {
+                stopTimeLapse()
+            }
+            if isVoiceEnabled {
+                stopVoiceRecognition(keepEnabled: false)
+            }
             isFaceDetectionEnabled = true
             statusMessage = "Face detection running"
-            updateFaceDetectionOutput(enabled: true)
-            startIntervalCapture(mode: .faceDetection)
             startSession()
-            sessionQueue.async {
-                self.configureFaceMetadataTypes()
-            }
+            captureService.setFaceDetectionEnabled(true)
+            timeLapseEngine.start(mode: .faceDetection, interval: timeLapseInterval)
         } else {
             isFaceDetectionEnabled = false
-            updateFaceDetectionOutput(enabled: false)
-            stopIntervalCapture()
+            captureService.setFaceDetectionEnabled(false)
+            timeLapseEngine.stop()
+            statusMessage = "Ready"
         }
+    }
+
+    func attachPictureInPictureSourceView(_ view: UIView) {
+        backgroundCoordinator.attachSourceView(view)
+    }
+
+    func submitBugReport(draft: BugReportDraft) async -> BugReportSubmissionResult {
+        do {
+            diagnosticsStore.log(subsystem: "bugs159", message: "Submitting bug report", metadata: [
+                "severity": draft.severity.rawValue
+            ])
+            let response = try await bugReportService.submit(draft: draft, recentLogs: diagnosticsStore.snapshot())
+            lastBugReportMessage = response.intake?.acknowledgement ?? "Bug reported."
+            diagnosticsStore.log(subsystem: "bugs159", message: "Bug report submitted", metadata: [
+                "state": response.intake?.state ?? "unknown"
+            ])
+            return .success(response)
+        } catch {
+            diagnosticsStore.error(subsystem: "bugs159", message: "Bug report submission failed", metadata: [
+                "error": error.localizedDescription
+            ])
+            lastBugReportMessage = error.localizedDescription
+            return .failure(error)
+        }
+    }
+
+    private var isBackgroundCaptureEligible: Bool {
+        isTimeLapseEnabled || isFaceDetectionEnabled
+    }
+
+    private func configureServices() {
+        captureService.onConfigured = { [weak self] configured, error in
+            guard let self else { return }
+            self.isSessionConfigured = configured
+            if let error {
+                self.fail(error)
+            }
+        }
+
+        captureService.onPhotoCapture = { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let data):
+                self.saveCapturedPhoto(data)
+            case .failure(let error):
+                self.fail(error.localizedDescription)
+            }
+        }
+
+        captureService.onFacePresenceChanged = { [weak self] hasFace in
+            guard let self else { return }
+            self.isFacePresent = hasFace
+            if hasFace, self.isFaceDetectionEnabled {
+                self.emitConfirmation()
+            }
+        }
+
+        backgroundCoordinator.sessionProvider = { [weak self] in
+            self?.captureService.session
+        }
+        backgroundCoordinator.isCaptureSessionRunning = { [weak self] in
+            self?.captureService.isSessionRunning() ?? false
+        }
+        backgroundCoordinator.onRecoveryRequested = { [weak self] in
+            guard let self else { return }
+            self.diagnosticsStore.warning(subsystem: "background", message: "Recovery requested for background capture")
+            self.startSession()
+        }
+        timeLapseCountdown = 0
+    }
+
+    private func makeTimeLapseEngine() -> TimeLapseEngine {
+        TimeLapseEngine(
+            diagnostics: diagnosticsStore,
+            selectedInterval: timeLapseInterval,
+            onTick: { [weak self] countdown in
+                self?.timeLapseCountdown = countdown
+            },
+            onFire: { [weak self] mode in
+                guard let self else { return }
+                switch mode {
+                case .timeLapse:
+                    self.capturePhoto()
+                case .faceDetection:
+                    if self.isFacePresent {
+                        self.capturePhoto()
+                    } else {
+                        self.diagnosticsStore.log(subsystem: "timelapse", message: "Face capture skipped because no face is present")
+                    }
+                }
+            }
+        )
     }
 
     private func startVoiceRecognition() {
@@ -416,6 +373,9 @@ final class CameraViewModel: NSObject, ObservableObject {
                 try audioSession.setPreferredSampleRate(44_100)
                 try audioSession.setPreferredIOBufferDuration(0.02)
                 try audioSession.setActive(true, options: [])
+                self.diagnosticsStore.log(subsystem: "audio", message: "Audio session configured for voice mode", metadata: [
+                    "category": "record"
+                ])
             } catch {
                 self.fail("Audio session error: \(error.localizedDescription)")
                 self.isVoiceEnabled = false
@@ -441,6 +401,7 @@ final class CameraViewModel: NSObject, ObservableObject {
                     return
                 }
             }
+
             inputNode.removeTap(onBus: 0)
             inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
                 self?.speechRequest?.append(buffer)
@@ -457,7 +418,7 @@ final class CameraViewModel: NSObject, ObservableObject {
 
             self.speechTask = self.speechRecognizer?.recognitionTask(with: self.speechRequest!) { [weak self] result, error in
                 guard let self else { return }
-                if let error = error {
+                if let error {
                     if !self.isVoiceEnabled {
                         return
                     }
@@ -483,7 +444,7 @@ final class CameraViewModel: NSObject, ObservableObject {
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
         configureAmbientAudioSession()
-        if !keepEnabled, isVoiceEnabled {
+        if !keepEnabled {
             isVoiceEnabled = false
         }
     }
@@ -525,17 +486,28 @@ final class CameraViewModel: NSObject, ObservableObject {
     }
 
     @objc private func appWillResignActive() {
-        stopTimeLapse()
-        stopVoiceRecognition(keepEnabled: false)
-        stopSession()
+        diagnosticsStore.log(subsystem: "lifecycle", message: "Application will resign active")
         if isVoiceEnabled {
-            isVoiceEnabled = false
+            stopVoiceRecognition(keepEnabled: false)
         }
-        statusMessage = "Paused: app inactive"
+        backgroundCoordinator.handleWillResignActive(allowBackgroundCapture: isBackgroundCaptureEligible)
+        if !isBackgroundCaptureEligible {
+            captureService.stopSession(reason: "app_will_resign_active")
+            statusMessage = "Paused: app inactive"
+        }
+    }
+
+    @objc private func appDidEnterBackground() {
+        backgroundCoordinator.handleDidEnterBackground(allowBackgroundCapture: isBackgroundCaptureEligible)
+    }
+
+    @objc private func appWillEnterForeground() {
+        backgroundCoordinator.handleWillEnterForeground()
     }
 
     @objc private func appDidBecomeActive() {
-        statusMessage = "Ready"
+        backgroundCoordinator.handleDidBecomeActive(allowBackgroundCapture: isBackgroundCaptureEligible)
+        statusMessage = isBackgroundCaptureEligible ? "Background capture recovered" : "Ready"
         configureAmbientAudioSession()
         startSession()
     }
@@ -575,10 +547,39 @@ final class CameraViewModel: NSObject, ObservableObject {
         }
     }
 
+    private func saveCapturedPhoto(_ data: Data) {
+        requestPhotoLibraryAccess { granted in
+            guard granted else {
+                self.fail("Pings library permission is required")
+                return
+            }
+
+            PHPhotoLibrary.shared().performChanges({
+                let request = PHAssetCreationRequest.forAsset()
+                request.addResource(with: .photo, data: data, options: nil)
+            }, completionHandler: { success, error in
+                Task { @MainActor in
+                    if let error {
+                        self.fail("Save failed: \(error.localizedDescription)")
+                    } else if success {
+                        self.statusMessage = "Ping saved"
+                        self.photoCount += 1
+                        self.captureState = self.isTimeLapseEnabled || self.isFaceDetectionEnabled ? .timeLapse : .idle
+                        self.emitConfirmation()
+                        self.diagnosticsStore.log(subsystem: "camera", message: "Photo saved to library", metadata: [
+                            "photoCount": String(self.photoCount)
+                        ])
+                    }
+                }
+            })
+        }
+    }
+
     private func fail(_ message: String) {
         lastError = message
         captureState = .error
         statusMessage = message
+        diagnosticsStore.error(subsystem: "app", message: message)
     }
 
     private func configureAmbientAudioSession() {
@@ -586,63 +587,13 @@ final class CameraViewModel: NSObject, ObservableObject {
         do {
             try audioSession.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
             try audioSession.setActive(true, options: [])
+            diagnosticsStore.log(subsystem: "audio", message: "Ambient audio session configured", metadata: [
+                "category": "ambient"
+            ])
         } catch {
-            // Best-effort; avoid interrupting the user if audio session can't be set.
-        }
-    }
-}
-
-nonisolated extension CameraViewModel: AVCapturePhotoCaptureDelegate, AVCaptureMetadataOutputObjectsDelegate {
-    func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        if let error {
-            Task { @MainActor in
-                self.fail("Ping capture failed: \(error.localizedDescription)")
-            }
-            return
-        }
-        guard let data = photo.fileDataRepresentation() else {
-            Task { @MainActor in
-                self.fail("Ping data unavailable")
-            }
-            return
-        }
-
-        Task { @MainActor in
-            self.requestPhotoLibraryAccess { granted in
-                guard granted else {
-                    self.fail("Pings library permission is required")
-                    return
-                }
-                PHPhotoLibrary.shared().performChanges({
-                    let request = PHAssetCreationRequest.forAsset()
-                    request.addResource(with: .photo, data: data, options: nil)
-                }, completionHandler: { success, error in
-                    Task { @MainActor in
-                        if let error {
-                            self.fail("Save failed: \(error.localizedDescription)")
-                        } else if success {
-                            self.statusMessage = "Ping saved"
-                            self.photoCount += 1
-                            if self.isTimeLapseEnabled {
-                                self.captureState = .timeLapse
-                            } else {
-                                self.captureState = .idle
-                            }
-                            self.emitConfirmation()
-                        }
-                    }
-                })
-            }
-        }
-    }
-
-    func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
-        let hasFace = metadataObjects.contains(where: { $0 is AVMetadataFaceObject })
-        Task { @MainActor in
-            self.isFacePresent = hasFace
-            if hasFace, self.isFaceDetectionEnabled {
-                self.emitConfirmation()
-            }
+            diagnosticsStore.warning(subsystem: "audio", message: "Failed to configure ambient audio session", metadata: [
+                "error": error.localizedDescription
+            ])
         }
     }
 }

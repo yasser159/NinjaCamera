@@ -14,15 +14,16 @@ struct CameraScreen: View {
     @State private var sliderProgress: CGFloat = 0
     @State private var coverVisible = false
     @State private var coverWorkItem: DispatchWorkItem?
+    @State private var diagnosticsPresented = false
 
-    private let intervals: [Double] = [5, 15, 30, 45, 60]
+    private let intervals: [Double] = [2, 5, 15, 30, 45, 60]
 
     private var style: CameraSkinStyle {
         selectedSkin.style
     }
 
     var body: some View {
-        Group {
+        ZStack(alignment: .topLeading) {
             if selectedSkin == .manuscript {
                 TextFileSkinView(viewModel: viewModel, selectedSkin: $selectedSkin, style: style)
             } else {
@@ -58,9 +59,11 @@ struct CameraScreen: View {
                     }
                 }
                 .onAppear { viewModel.startSession() }
-                .onDisappear { viewModel.stopSession() }
                 .onChange(of: isModeActive) { _, active in
                     updateCoverVisibility(isActive: active)
+                }
+                .sheet(isPresented: $diagnosticsPresented) {
+                    DiagnosticsScreen(viewModel: viewModel)
                 }
                 .alert("Issue", isPresented: Binding(get: {
                     viewModel.lastError != nil
@@ -74,6 +77,11 @@ struct CameraScreen: View {
                     Text(viewModel.lastError ?? "Unknown error")
                 })
             }
+            PictureInPictureSourceBridge { view in
+                viewModel.attachPictureInPictureSourceView(view)
+            }
+            .frame(width: 2, height: 2)
+            .opacity(0.01)
         }
     }
 
@@ -115,6 +123,12 @@ struct CameraScreen: View {
                 .font(.system(size: 14, weight: .medium, design: .rounded))
                 .foregroundStyle(style.primaryText)
             Spacer()
+            Button("Logs") {
+                diagnosticsPresented = true
+            }
+            .font(.system(size: 12, weight: .medium, design: .rounded))
+            .buttonStyle(.plain)
+            .foregroundStyle(style.secondaryText)
             Text(viewModel.captureState.rawValue)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(style.secondaryText)

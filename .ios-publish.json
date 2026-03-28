@@ -1,0 +1,14 @@
+{
+  "scheme": "NinjaCamera",
+  "xcodeproj": "NinjaCamera.xcodeproj",
+  "configuration": "Release",
+  "archivePath": "/tmp/NinjaCamera.xcarchive",
+  "exportPath": "/tmp/NinjaCameraExport",
+  "targets": [
+    {
+      "bundleId": "com.yasser159.NinjaCamera",
+      "profileName": "NinjaCamera AppStore",
+      "ascBundleId": "ABBNUJVP67"
+    }
+  ]
+}
