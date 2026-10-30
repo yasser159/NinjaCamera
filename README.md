@@ -1,109 +1,33 @@
-# Zero Camera – iOS App
+# Zero Camera
 
-## Codex / AI Brief (One Screen)
+A minimal iOS camera that takes photos with as little on-screen interaction as possible: cover the screen, say "Now", or let a time-lapse run.
 
-Build a minimal iOS camera app that can capture photos with minimal on‑screen interaction, plus optional voice control, face-triggered shots, and time‑lapse. Keep all behavior compliant with iOS permissions and background execution limits. The UI should be sparse and fast to configure.
+Built with Swift and AVFoundation. Voice recognition runs on-device where available.
 
-**Goals**
-- Screen cover during capture sessions, with tap-to-reveal.
-- Voice command: “Now” (photo).
-- Time‑lapse intervals: 5/15/30/45/60 seconds.
-- Haptic or optional audio confirmation.
-- Clear opt‑in controls for each mode.
+## Features
 
-**Guardrails**
-- Must require explicit camera/mic permissions.
-- No bypassing system security or hidden capture tricks.
-- Respect privacy/consent laws; app is for lawful use only.
+**Screen cover**
+Black out the display during a capture session; tap to reveal the controls again. No preview, no shutter animation.
 
-**Tech Notes**
-- Use AVFoundation for capture.
-- Voice recognition should run locally where possible and fail gracefully.
-- Background behavior must use iOS‑approved modes/tasks.
+**Voice capture**
+Say "Now" to take a photo. Optional haptic or audible confirmation.
 
-**Non‑Goals & App Store Safety**
-- Not a covert surveillance tool; no hidden background recording.
-- No recording while the app is not in foreground beyond iOS‑allowed modes.
-- No remote/stealth triggers; user action must be explicit.
-- Avoid language or UI that suggests spying or secret recording.
+**Time-lapse**
+Capture at a fixed interval: 5, 15, 30, 45 or 60 seconds. Pause or stop at any time; capture continues while the screen is covered.
 
----
+**Sparse UI**
+One screen with clear toggles for voice activation, screen cover and interval. Every mode is opt-in.
 
-## Overview
+## Privacy and intended use
 
-Zero Camera is an iOS camera application designed to capture photos with minimal on-screen interaction. The app supports a black screen cover and voice-activated controls, allowing hands-free use in situations where visible phone interaction is undesirable.
+- Camera and microphone access require explicit iOS permission prompts.
+- Nothing runs outside iOS-approved foreground and background modes. There is no hidden or remote capture.
+- The app is for lawful use. You are responsible for local laws on photography and consent.
 
-**Important:** This app is intended for lawful, ethical use only. Users are responsible for complying with local laws regarding photography, audio input, and consent.
+## Building
 
----
+Open the Xcode project, select a device (the camera does not work in the Simulator) and run.
 
-## Core Features
+## License
 
-### Screen-Off Capture
-
-- Capture photos while the device screen is off.
-- No visible camera preview or shutter animation.
-- Designed to reduce visual cues during capture.
-
----
-
-## Voice-Activated Mode
-
-Hands-free camera control using simple voice commands.
-
-**Supported commands:**
-- “Now” → Capture a photo
-
-**Notes:**
-- Voice recognition runs locally where possible.
-- Sensitivity and activation distance should be configurable.
-- Optional audible or haptic confirmation can be enabled/disabled.
-
----
-
-## Time-Lapse Mode
-
-Automatically capture photos at fixed intervals.
-
-**Interval options:**
-- 5 seconds
-- 15 seconds
-- 30 seconds
-- 45 seconds
-- 60 seconds
-
-**Activation methods:**
-- Via UI controls
-
-**Behavior:**
-- Photos continue to be captured while the screen is covered.
-- Time-lapse session can be paused or stopped manually.
-
----
-
-## User Interface
-
-- Minimal UI designed for quick setup.
-- Clear toggles for:
-  - Voice activation
-  - Screen cover
-  - Time-lapse interval selection
-- Status indicators (subtle vibration or optional sound).
-
----
-
-## Privacy & Legal Notice
-
-- This app does not bypass iOS security or system permissions.
-- Camera and microphone access require explicit user approval.
-- Users must respect privacy laws and obtain consent where required.
-- The developer assumes no liability for misuse.
-
----
-
-## Technical Notes (Optional for README)
-
-- Uses AVFoundation for camera and audio capture.
-- Background execution limited to iOS-approved modes.
-- Screen-off behavior relies on system-compliant background tasks.
-- Voice recognition should degrade gracefully when unavailable.
+MIT
